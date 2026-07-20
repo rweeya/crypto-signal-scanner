@@ -1,9 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// ============================================
-// TYPES
-// ============================================
 type SignalDirection = 'BUY' | 'SELL' | 'NEUTRAL';
 
 interface IndicatorValues {
@@ -35,9 +32,6 @@ interface ScanHistory {
   sellSignals: number;
 }
 
-// ============================================
-// INDICATOR CALCULATIONS
-// ============================================
 const calculateRSI = (prices: number[], period: number = 14): number => {
   if (prices.length < period + 1) return 50;
   const changes = prices.slice(1).map((p, i) => p - prices[i]);
@@ -126,9 +120,6 @@ const calculateADX = (prices: number[], period: number = 14): number => {
   return dx;
 };
 
-// ============================================
-// SIGNAL GENERATION
-// ============================================
 const generateSignal = (symbol: string, prices: number[]): Signal | null => {
   if (prices.length < 50) return null;
   
@@ -206,7 +197,7 @@ const generateSignal = (symbol: string, prices: number[]): Signal | null => {
 };
 
 // ============================================
-// BINANCE API
+// ОПТИМИЗИРОВАННЫЙ API С ЗАДЕРЖКОЙ
 // ============================================
 const fetchBinancePrices = async (): Promise<{ symbol: string; price: number; prices: number[] }[]> => {
   try {
@@ -216,29 +207,32 @@ const fetchBinancePrices = async (): Promise<{ symbol: string; price: number; pr
     const usdtPairs = data
       .filter((item: any) => item.symbol.endsWith('USDT'))
       .sort((a: any, b: any) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-      .slice(0, 150);
+      .slice(0, 80);
     
-    const results = await Promise.all(
-      usdtPairs.map(async (item: any) => {
-        try {
-          const klinesResponse = await fetch(
-            `https://api.binance.com/api/v3/klines?symbol=${item.symbol}&interval=1h&limit=100`
-          );
-          const klinesData = await klinesResponse.json();
-          const prices = klinesData.map((k: any) => parseFloat(k[4]));
-          
-          return {
-            symbol: item.symbol,
-            price: parseFloat(item.lastPrice),
-            prices
-          };
-        } catch (e) {
-          return null;
-        }
-      })
-    );
+    const results = [];
     
-    return results.filter((r): r is { symbol: string; price: number; prices: number[] } => r !== null);
+    for (const item of usdtPairs) {
+      try {
+        const klinesResponse = await fetch(
+          `https://api.binance.com/api/v3/klines?symbol=${item.symbol}&interval=1h&limit=50`
+        );
+        const klinesData = await klinesResponse.json();
+        const prices = klinesData.map((k: any) => parseFloat(k[4]));
+        
+        results.push({
+          symbol: item.symbol,
+          price: parseFloat(item.lastPrice),
+          prices
+        });
+        
+        await new Promise(resolve => setTimeout(resolve, 80));
+        
+      } catch (e) {
+        console.error(`Error fetching ${item.symbol}:`, e);
+      }
+    }
+    
+    return results;
   } catch (error) {
     console.error('Error fetching from Binance:', error);
     return [];
@@ -255,6 +249,7 @@ const App: React.FC = () => {
   const [filterDirection, setFilterDirection] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
   const [minStrength, setMinStrength] = useState(2);
   const [lastScanTime, setLastScanTime] = useState<number | null>(null);
+  const [scanProgress, setScanProgress] = useState(0);
   
   useEffect(() => {
     const saved = localStorage.getItem('scanHistory');
@@ -271,19 +266,22 @@ const App: React.FC = () => {
   
   const scanMarket = useCallback(async () => {
     setIsScanning(true);
+    setScanProgress(0);
     try {
       const data = await fetchBinancePrices();
       const newSignals: Signal[] = [];
       let buyCount = 0;
       let sellCount = 0;
       
-      for (const item of data) {
+      for (let i = 0; i < data.length; i++) {
+        const item = data[i];
         const signal = generateSignal(item.symbol, item.prices);
         if (signal) {
           newSignals.push(signal);
           if (signal.direction === 'BUY') buyCount++;
           else if (signal.direction === 'SELL') sellCount++;
         }
+        setScanProgress(Math.round((i / data.length) * 100));
       }
       
       setSignals(newSignals);
@@ -300,6 +298,7 @@ const App: React.FC = () => {
       console.error('Scan failed:', error);
     } finally {
       setIsScanning(false);
+      setScanProgress(100);
     }
   }, []);
   
@@ -341,7 +340,7 @@ const App: React.FC = () => {
               {isScanning ? (
                 <>
                   <span className="animate-spin">⚡</span>
-                  SCANNING...
+                  SCANNING... {scanProgress}%
                 </>
               ) : (
                 '🔍 SCAN MARKET'
@@ -440,7 +439,15 @@ const App: React.FC = () => {
               >
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <div className="text-lg font-bold">{signal.symbol}</div>
+                    <a 
+                      href={`https://www.bybit.com/trade/spot/${signal.symbol.replace('USDT', '')}/USDT`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-lg font-bold hover:text-blue-400 transition-colors cursor-pointer"
+                      title="Открыть на Bybit"
+                    >
+                      {signal.symbol} ↗
+                    </a>
                     <div className={`text-sm font-bold ${
                       signal.direction === 'BUY' ? 'text-green-400' : 'text-red-400'
                     }`}>
@@ -494,7 +501,7 @@ const App: React.FC = () => {
           <div className="text-center text-gray-500 py-20">
             <div className="text-6xl mb-4">📡</div>
             <p>Click "SCAN MARKET" to start scanning</p>
-            <p className="text-sm text-gray-600 mt-2">Scanning 150 USDT pairs on Binance</p>
+            <p className="text-sm text-gray-600 mt-2">Scanning 80 USDT pairs on Binance</p>
           </div>
         )}
         
