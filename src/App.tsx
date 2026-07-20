@@ -300,7 +300,6 @@ const fetchBinanceData = async (symbols: string[]): Promise<any[]> => {
     const batchResults = await Promise.all(batchPromises);
     results.push(...batchResults.filter(r => r !== null));
     
-    // Задержка между батчами
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   
@@ -343,7 +342,6 @@ const App: React.FC = () => {
     setScanStatus('Получение списка пар...');
     
     try {
-      // Получаем топ 80 пар по объему
       const tickerRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
       const tickerData = await tickerRes.json();
       
@@ -357,7 +355,7 @@ const App: React.FC = () => {
       
       const data = await fetchBinanceData(symbols);
       
-      const newSignals: Signal[] = [];
+      const allSignals: Signal[] = [];
       let buyCount = 0;
       let sellCount = 0;
       
@@ -367,7 +365,7 @@ const App: React.FC = () => {
         
         const signal = generateSignal(item.symbol, item.prices, item.volumes);
         if (signal) {
-          newSignals.push(signal);
+          allSignals.push(signal);
           if (signal.direction === 'BUY') buyCount++;
           else if (signal.direction === 'SELL') sellCount++;
         }
@@ -375,26 +373,44 @@ const App: React.FC = () => {
         setScanProgress(Math.round(((i + 1) / data.length) * 100));
         setScanStatus(`Обработка ${i + 1}/${data.length}: ${item.symbol}`);
         
-        // Даем браузеру время на рендеринг
         if (i % 10 === 0) {
           await new Promise(resolve => setTimeout(resolve, 10));
         }
       }
       
+      // ============================================
+      // 🔥 ВЫБИРАЕМ ТОЛЬКО 1 САМЫЙ СИЛЬНЫЙ СИГНАЛ
+      // ============================================
+      let bestSignal: Signal | null = null;
+      let bestScore = -1;
+      
+      for (const signal of allSignals) {
+        const score = signal.strength * 20 + signal.confidence;
+        if (score > bestScore) {
+          bestScore = score;
+          bestSignal = signal;
+        }
+      }
+      
+      const newSignals = bestSignal ? [bestSignal] : [];
+      
       setSignals(newSignals);
       setLastScanTime(Date.now());
-      setScanStatus(`Готово! Найдено ${newSignals.length} сигналов`);
+      setScanStatus(bestSignal 
+        ? `🏆 VIP сигнал: ${bestSignal.symbol} (${bestSignal.direction}) ★${bestSignal.strength} ${bestSignal.confidence}%` 
+        : '😴 Сигналов не найдено'
+      );
       
       setHistory(prev => [...prev, {
         timestamp: Date.now(),
-        totalSignals: newSignals.length,
+        totalSignals: allSignals.length,
         buySignals: buyCount,
         sellSignals: sellCount
       }]);
       
     } catch (error) {
       console.error('Scan failed:', error);
-      setScanStatus('Ошибка сканирования');
+      setScanStatus('❌ Ошибка сканирования');
     } finally {
       setIsScanning(false);
       abortControllerRef.current = null;
@@ -423,6 +439,13 @@ const App: React.FC = () => {
     return 'text-red-400';
   };
   
+  // Функция для создания ссылки на Bybit Testnet
+  const getBybitLink = (symbol: string) => {
+    // Убираем USDT из названия для ссылки
+    const baseSymbol = symbol.replace('USDT', '');
+    return `https://testnet.bybit.com/trade/spot/${baseSymbol}/USDT`;
+  };
+  
   return (
     <div className="min-h-screen bg-black text-white font-mono p-4 md:p-8">
       <div className="fixed inset-0 bg-gradient-to-b from-red-900/5 via-black to-black pointer-events-none" />
@@ -433,7 +456,8 @@ const App: React.FC = () => {
             <h1 className="text-3xl font-bold bg-gradient-to-r from-red-500 to-red-800 bg-clip-text text-transparent">
               ⚡ CYBER SCAN VIP
             </h1>
-            <p className="text-gray-400 text-sm">10 индикаторов для точных сигналов</p>
+            <p className="text-gray-400 text-sm">10 индикаторов • Только лучший сигнал</p>
+            <p className="text-xs text-blue-400 mt-1">🧪 Bybit Testnet</p>
           </div>
           
           <div className="flex flex-wrap gap-3">
@@ -489,7 +513,7 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="bg-yellow-950/30 border border-yellow-800/30 rounded-lg p-3">
-            <div className="text-gray-400 text-xs">Сред. точность</div>
+            <div className="text-gray-400 text-xs">Точность</div>
             <div className="text-2xl font-bold text-yellow-400">
               {signals.length > 0 ? Math.round(signals.reduce((a, s) => a + s.confidence, 0) / signals.length) : 0}%
             </div>
@@ -547,69 +571,68 @@ const App: React.FC = () => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 transition={{ delay: index * 0.05 }}
-                className={`border rounded-lg p-4 ${
+                className={`border-2 rounded-lg p-5 ${
                   signal.direction === 'BUY'
-                    ? 'bg-green-950/20 border-green-500/30'
-                    : 'bg-red-950/20 border-red-500/30'
+                    ? 'bg-green-950/30 border-green-500/50 shadow-[0_0_30px_rgba(34,197,94,0.15)]'
+                    : 'bg-red-950/30 border-red-500/50 shadow-[0_0_30px_rgba(239,68,68,0.15)]'
                 }`}
               >
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <a 
-                      href={`https://www.bybit.com/trade/spot/${signal.symbol.replace('USDT', '')}/USDT`}
+                      href={getBybitLink(signal.symbol)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-lg font-bold hover:text-blue-400 transition-colors cursor-pointer flex items-center gap-1"
-                      title="Открыть на Bybit"
+                      className="text-2xl font-bold hover:text-blue-400 transition-colors cursor-pointer flex items-center gap-2"
+                      title="Открыть на Bybit Testnet"
                     >
                       {signal.symbol} 
-                      <span className="text-xs text-blue-400">↗</span>
+                      <span className="text-sm text-blue-400">↗</span>
                     </a>
-                    <div className={`text-sm font-bold ${
+                    <div className={`text-lg font-bold ${
                       signal.direction === 'BUY' ? 'text-green-400' : 'text-red-400'
                     }`}>
                       {signal.direction} 
-                      <span className={`text-xs ml-2 ${getConfidenceColor(signal.confidence)}`}>
-                        {signal.confidence}%
+                      <span className={`text-sm ml-3 ${getConfidenceColor(signal.confidence)}`}>
+                        {signal.confidence}% точность
                       </span>
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-sm text-gray-400">Цена</div>
-                    <div className="font-mono">${formatPrice(signal.price)}</div>
+                    <div className="text-xl font-mono font-bold">${formatPrice(signal.price)}</div>
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-yellow-400 text-sm">{getStarRating(signal.strength)}</span>
-                  <span className="text-gray-500 text-xs">({signal.strength}/5)</span>
+                <div className="flex items-center gap-3 mb-4">
+                  <span className="text-2xl text-yellow-400">{getStarRating(signal.strength)}</span>
+                  <span className="text-gray-500 text-sm">({signal.strength}/5)</span>
+                  <span className="ml-auto text-xs text-gray-500">
+                    #{signal.timestamp.toString().slice(-6)}
+                  </span>
                 </div>
                 
-                <div className="grid grid-cols-3 gap-1 text-xs mb-3">
-                  <div className="text-gray-400">RSI: <span className="text-white">{signal.indicators.rsi.toFixed(1)}</span></div>
-                  <div className="text-gray-400">Stoch: <span className="text-white">{signal.indicators.stochastic.toFixed(1)}</span></div>
-                  <div className="text-gray-400">ADX: <span className="text-white">{signal.indicators.adx.toFixed(1)}</span></div>
-                  <div className="text-gray-400">MACD: <span className="text-white">{signal.indicators.macd.toFixed(4)}</span></div>
-                  <div className="text-gray-400">EMA20: <span className="text-white">{signal.indicators.ema20.toFixed(4)}</span></div>
-                  <div className="text-gray-400">EMA50: <span className="text-white">{signal.indicators.ema50.toFixed(4)}</span></div>
-                  <div className="text-gray-400 col-span-1">BB: <span className="text-white">
-                    {signal.indicators.bollingerUpper.toFixed(4)}
-                  </span></div>
-                  <div className="text-gray-400 col-span-2">OBV: <span className="text-white">
-                    {signal.indicators.obv > 0 ? '+' : ''}{signal.indicators.obv.toFixed(0)}
-                  </span></div>
+                <div className="grid grid-cols-3 gap-2 text-xs mb-4 bg-black/30 rounded-lg p-3">
+                  <div className="text-gray-400">RSI: <span className="text-white font-bold">{signal.indicators.rsi.toFixed(1)}</span></div>
+                  <div className="text-gray-400">Stoch: <span className="text-white font-bold">{signal.indicators.stochastic.toFixed(1)}</span></div>
+                  <div className="text-gray-400">ADX: <span className="text-white font-bold">{signal.indicators.adx.toFixed(1)}</span></div>
+                  <div className="text-gray-400 col-span-1">MACD: <span className="text-white font-bold">{signal.indicators.macd.toFixed(4)}</span></div>
+                  <div className="text-gray-400 col-span-2">MACD Hist: <span className="text-white font-bold">{signal.indicators.macdHistogram.toFixed(4)}</span></div>
+                  <div className="text-gray-400">EMA20: <span className="text-white font-bold">{signal.indicators.ema20.toFixed(4)}</span></div>
+                  <div className="text-gray-400">EMA50: <span className="text-white font-bold">{signal.indicators.ema50.toFixed(4)}</span></div>
+                  <div className="text-gray-400">BB: <span className="text-white font-bold">{signal.indicators.bollingerUpper.toFixed(4)}</span></div>
                 </div>
                 
-                <div className="flex justify-between text-xs border-t border-gray-800 pt-2">
+                <div className="flex justify-between text-sm border-t border-gray-800 pt-3">
                   <div>
                     <span className="text-gray-400">TP</span>
-                    <span className="text-green-400 ml-1">+1.5%</span>
-                    <span className="text-gray-500 ml-1">${formatPrice(signal.tp)}</span>
+                    <span className="text-green-400 ml-2">+1.5%</span>
+                    <span className="text-gray-500 ml-2">${formatPrice(signal.tp)}</span>
                   </div>
                   <div>
                     <span className="text-gray-400">SL</span>
-                    <span className="text-red-400 ml-1">-0.5%</span>
-                    <span className="text-gray-500 ml-1">${formatPrice(signal.sl)}</span>
+                    <span className="text-red-400 ml-2">-0.5%</span>
+                    <span className="text-gray-500 ml-2">${formatPrice(signal.sl)}</span>
                   </div>
                 </div>
               </motion.div>
@@ -628,6 +651,8 @@ const App: React.FC = () => {
             <div className="text-6xl mb-4">📡</div>
             <p>Нажмите "SCAN MARKET" для сканирования</p>
             <p className="text-sm text-gray-600 mt-2">80 пар USDT на Binance • 10 индикаторов</p>
+            <p className="text-sm text-gray-600 mt-1">Показывается только 1 лучший сигнал</p>
+            <p className="text-sm text-blue-400 mt-2">🧪 Торговля на Bybit Testnet</p>
           </div>
         )}
         
