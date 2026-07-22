@@ -118,9 +118,10 @@ const App = () => {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [scanning, setScanning] = useState(false);
   const [filter, setFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
-  const [minStrength, setMinStrength] = useState<1 | 2 | 3>(2);
+  const [minStrength, setMinStrength] = useState<1 | 2 | 3>(1);
   const [scanHistory, setScanHistory] = useState<ScanResult[]>([]);
   const [totalScanned, setTotalScanned] = useState(0);
+  const [scanCount, setScanCount] = useState(0);
   const priceCache = useRef<Map<string, number[]>>(new Map());
   const lastScanTime = useRef<Map<string, number>>(new Map());
 
@@ -137,11 +138,29 @@ const App = () => {
     const now = Date.now();
 
     try {
-      const res = await fetch('https://api.binance.com/api/v3/ticker/price');
-      const allPrices = await res.json();
+      const [priceRes, volumeRes] = await Promise.all([
+        fetch('https://api.binance.com/api/v3/ticker/price'),
+        fetch('https://api.binance.com/api/v3/ticker/24hr')
+      ]);
+      
+      const allPrices = await priceRes.json();
+      const volumeData = await volumeRes.json();
+      
+      // Топ-100 по объёму
+      const topByVolume = new Set(
+        volumeData
+          .filter((t: any) => t.symbol.endsWith('USDT'))
+          .sort((a: any, b: any) => parseFloat(b.volume) - parseFloat(a.volume))
+          .slice(0, 100)
+          .map((t: any) => t.symbol.replace('USDT', '/USDT'))
+      );
+
       let scannedCount = 0;
 
       for (const sym of SYMBOLS) {
+        // Пропускаем неликвидные
+        if (!topByVolume.has(sym)) continue;
+
         const binanceSym = sym.replace('/', '');
         const ticker = allPrices.find((t: any) => t.symbol === binanceSym);
         if (!ticker) continue;
@@ -155,11 +174,7 @@ const App = () => {
         if (history.length > 200) history = history.slice(-200);
         priceCache.current.set(sym, history);
 
-        if (history.length < 60) continue;
-
-        // Кулдаун 2 минуты
-        const lastScan = lastScanTime.current.get(sym);
-        if (lastScan && now - lastScan < 120000) continue;
+        if (history.length < 50) continue;
 
         // Индикаторы
         const rsi = calcRSI(history);
@@ -169,38 +184,34 @@ const App = () => {
         const ema20 = calcEMA(history, 20);
         const atr = calcATR(history);
 
-        // Фильтр ATR (волатильность > 0.3%)
-        if (atr / price < 0.003) continue;
-
-        // Фильтр ADX (тренд > 25)
-        if (adx < 25) continue;
+        // Фильтр ATR (волатильность > 0.2%)
+        if (atr / price < 0.002) continue;
 
         scannedCount++;
 
-        // BUY
-        if (rsi < 30 && stoch < 20 && macd > 0 && price > ema20) {
-          const strength: 1 | 2 | 3 = rsi < 20 || stoch < 10 ? 3 : rsi < 25 ? 2 : 1;
+        // BUY — мягкие условия
+        if (rsi < 40 && stoch < 30 && macd > 0 && price > ema20 && adx > 20) {
+          const strength: 1 | 2 | 3 = rsi < 25 && stoch < 15 ? 3 : rsi < 32 ? 2 : 1;
           newSignals.push({
             symbol: sym, action: 'BUY', price, strength,
             rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
             tp: price * 1.01, sl: price * 0.997
           });
-          lastScanTime.current.set(sym, now);
         }
-        // SELL
-        else if (rsi > 70 && stoch > 80 && macd < 0 && price < ema20) {
-          const strength: 1 | 2 | 3 = rsi > 80 || stoch > 90 ? 3 : rsi > 75 ? 2 : 1;
+        // SELL — мягкие условия
+        else if (rsi > 60 && stoch > 70 && macd < 0 && price < ema20 && adx > 20) {
+          const strength: 1 | 2 | 3 = rsi > 75 && stoch > 85 ? 3 : rsi > 68 ? 2 : 1;
           newSignals.push({
             symbol: sym, action: 'SELL', price, strength,
             rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
             tp: price * 0.99, sl: price * 1.003
           });
-          lastScanTime.current.set(sym, now);
         }
       }
 
       setTotalScanned(scannedCount);
       setSignals(newSignals.sort((a, b) => b.strength - a.strength));
+      setScanCount(prev => prev + 1);
 
       // История
       const result: ScanResult = {
@@ -228,7 +239,7 @@ const App = () => {
           <div className="flex justify-between items-center flex-wrap gap-4">
             <div>
               <h1 className="text-2xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">🔍 CRYPTO SIGNAL SCANNER</h1>
-              <p className="text-xs text-gray-500 mt-1">{SYMBOLS.length} активов | RSI + Stoch + MACD + ADX + ATR</p>
+              <p className="text-xs text-gray-500 mt-1">{SYMBOLS.length} активов | Топ-100 по объёму | RSI + Stoch + MACD + ADX + ATR</p>
             </div>
             <button
               onClick={scan}
@@ -247,7 +258,7 @@ const App = () => {
 
       <div className="container mx-auto px-4 py-6">
         {/* Статистика */}
-        {signals.length > 0 && (
+        {scanCount > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
             <div className="bg-black/50 rounded-xl p-3 border border-red-500/20 text-center">
               <div className="text-xs text-gray-500">Просканировано</div>
@@ -270,8 +281,8 @@ const App = () => {
               <div className="text-xl font-bold text-yellow-400">{signals.filter(s => s.strength === 3).length}</div>
             </div>
             <div className="bg-black/50 rounded-xl p-3 border border-blue-500/20 text-center">
-              <div className="text-xs text-gray-500">Последнее</div>
-              <div className="text-sm font-bold text-blue-400">{scanHistory[0]?.time || '—'}</div>
+              <div className="text-xs text-gray-500">Сканирований</div>
+              <div className="text-xl font-bold text-blue-400">{scanCount}</div>
             </div>
           </div>
         )}
@@ -307,11 +318,18 @@ const App = () => {
         </div>
 
         {/* Сигналы */}
-        {filteredSignals.length === 0 && !scanning && (
+        {scanCount === 0 && !scanning && (
           <div className="text-center py-20 text-gray-600">
             <div className="text-6xl mb-4">🔍</div>
-            <div className="text-lg">Нет сигналов</div>
-            <div className="text-sm mt-2">Нажми "Сканировать рынок" для поиска</div>
+            <div className="text-lg">Нажми "Сканировать рынок" для поиска сигналов</div>
+          </div>
+        )}
+
+        {scanCount > 0 && filteredSignals.length === 0 && !scanning && (
+          <div className="text-center py-10 text-gray-500">
+            <div className="text-4xl mb-3">📭</div>
+            <div>Нет сигналов с выбранными фильтрами</div>
+            <div className="text-sm mt-2">Попробуй изменить фильтры или нажать сканировать позже</div>
           </div>
         )}
 
@@ -351,7 +369,7 @@ const App = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-5 gap-1 text-xs">
+              <div className="grid grid-cols-5 gap-1 text-[10px]">
                 <div className="bg-black/30 rounded p-1.5 text-center">
                   <div className="text-gray-500">RSI</div>
                   <div className={s.rsi < 30 ? 'text-green-400' : s.rsi > 70 ? 'text-red-400' : 'text-white'}>{s.rsi}</div>
@@ -381,8 +399,8 @@ const App = () => {
         {scanHistory.length > 0 && (
           <div className="mt-8">
             <h2 className="text-lg font-bold text-gray-400 mb-3">📜 История сканирований</h2>
-            <div className="bg-black/40 rounded-xl border border-gray-800 overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-black/40 rounded-xl border border-gray-800 overflow-hidden overflow-x-auto">
+              <table className="w-full text-sm min-w-[500px]">
                 <thead>
                   <tr className="border-b border-gray-800 text-gray-500">
                     <th className="py-2 px-4 text-left">Время</th>
