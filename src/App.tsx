@@ -41,7 +41,6 @@ interface Signal {
   atr: number;
   tp: number;
   sl: number;
-  aiVerdict?: string;
 }
 
 interface ScanResult {
@@ -51,8 +50,6 @@ interface ScanResult {
   buyCount: number;
   sellCount: number;
 }
-
-const AI_TOKEN = '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';
 
 const calcRSI = (prices: number[], period: number = 14): number => {
   if (prices.length < period + 1) return 50;
@@ -116,25 +113,6 @@ const calcATR = (prices: number[], period: number = 14): number => {
   return atr;
 };
 
-const getAIProbability = async (symbol: string, action: string, rsi: number, stoch: number, adx: number): Promise<number> => {
-  if (!AI_TOKEN) return 50;
-  try {
-    const res = await fetch('https://api-inference.huggingface.co/models/google/flan-t5-small', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${AI_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        inputs: `Analyze crypto ${symbol}: RSI=${rsi}, Stochastic=${stoch}, ADX=${adx}. Probability of ${action} success in next 15 minutes? Answer with a number from 0 to 100.`,
-        parameters: { max_new_tokens: 5, temperature: 0.1 }
-      })
-    });
-    const data = await res.json();
-    const text = data?.[0]?.generated_text || '50';
-    return parseInt(text) || 50;
-  } catch {
-    return 50;
-  }
-};
-
 const App = () => {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [scanning, setScanning] = useState(false);
@@ -165,7 +143,6 @@ const App = () => {
       const newSignals: Signal[] = [];
       attempts++;
       setAttemptInfo(`Поиск сигналов... Попытка ${attempts}/${maxAttempts}`);
-      console.log(`🔍 Попытка ${attempts}/${maxAttempts}`);
 
       try {
         const [priceRes, volumeRes] = await Promise.all([
@@ -175,8 +152,6 @@ const App = () => {
         
         const allPrices = await priceRes.json();
         const volumeData = await volumeRes.json();
-        
-        console.log(`📊 Получено ${allPrices.length} цен`);
 
         const topByVolume = new Set(
           volumeData
@@ -235,8 +210,6 @@ const App = () => {
           }
         }
 
-        console.log(`📊 Просканировано: ${scannedCount}, сигналов: ${newSignals.length}`);
-
         if (newSignals.length > 0) {
           found = true;
           const sorted = newSignals.sort((a, b) => b.probability - a.probability);
@@ -291,7 +264,7 @@ const App = () => {
         <div className="container mx-auto px-4 py-4">
           <div className="flex justify-between items-center flex-wrap gap-4">
             <div>
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">🤖 AI CRYPTO SIGNAL SCANNER</h1>
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">🤖 CRYPTO SIGNAL SCANNER</h1>
               <p className="text-xs text-gray-500 mt-1">{SYMBOLS.length} активов | RSI + Stoch + MACD + ADX + ATR</p>
             </div>
             <button
@@ -314,7 +287,6 @@ const App = () => {
           <div className="text-center py-10">
             <div className="text-4xl mb-4 animate-pulse">🔍</div>
             <div className="text-lg text-purple-400">{attemptInfo || 'Поиск сигналов...'}</div>
-            <div className="text-sm text-gray-500 mt-2">Сканирую 100 топовых активов</div>
           </div>
         )}
 
@@ -366,93 +338,39 @@ const App = () => {
             <div className="flex flex-wrap gap-3 mb-6">
               <div className="flex gap-1 bg-black/40 rounded-lg p-1">
                 {(['ALL', 'BUY', 'SELL'] as const).map(f => (
-                  <button
-                    key={f}
-                    onClick={() => setFilter(f)}
-                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                      filter === f ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    {f === 'ALL' ? 'Все' : f}
-                  </button>
+                  <button key={f} onClick={() => setFilter(f)} className={`px-4 py-1.5 rounded-md text-sm font-medium ${filter === f ? 'bg-purple-600 text-white' : 'text-gray-400'}`}>{f === 'ALL' ? 'Все' : f}</button>
                 ))}
               </div>
-              <select
-                value={minProbability}
-                onChange={e => setMinProbability(Number(e.target.value))}
-                className="bg-black/40 border border-gray-700 rounded-lg px-3 py-1.5 text-sm"
-              >
-                <option value={0}>Все вероятности</option>
+              <select value={minProbability} onChange={e => setMinProbability(Number(e.target.value))} className="bg-black/40 border border-gray-700 rounded-lg px-3 py-1.5 text-sm">
+                <option value={0}>Все</option>
                 <option value={50}>≥ 50%</option>
                 <option value={60}>≥ 60%</option>
-                <option value={70}>≥ 70%</option>
               </select>
             </div>
 
             {filteredSignals.length === 0 && (
-              <div className="text-center py-10 text-gray-500">
-                <div className="text-4xl mb-3">📭</div>
-                <div>Нет сигналов с вероятностью ≥ {minProbability}%</div>
-              </div>
+              <div className="text-center py-10 text-gray-500">Нет сигналов</div>
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredSignals.map((s, i) => (
-                <div
-                  key={i}
-                  onClick={() => openBybit(s.symbol)}
-                  className={`rounded-xl p-4 border cursor-pointer transition-all hover:scale-[1.02] ${
-                    s.action === 'BUY'
-                      ? 'bg-gradient-to-br from-green-950/30 to-black border-green-500/30 hover:border-green-400/50'
-                      : 'bg-gradient-to-br from-red-950/30 to-black border-red-500/30 hover:border-red-400/50'
-                  }`}
-                >
+                <div key={i} onClick={() => openBybit(s.symbol)} className={`rounded-xl p-4 border cursor-pointer transition-all hover:scale-[1.02] ${s.action === 'BUY' ? 'bg-gradient-to-br from-green-950/30 to-black border-green-500/30' : 'bg-gradient-to-br from-red-950/30 to-black border-red-500/30'}`}>
                   <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <span className="font-bold text-lg">{s.symbol}</span>
-                      <span className={`ml-2 px-2 py-0.5 rounded text-xs font-bold ${
-                        s.action === 'BUY' ? 'bg-green-600' : 'bg-red-600'
-                      }`}>{s.action}</span>
-                    </div>
-                    <div className="text-right">
-                      <div className={`text-lg font-bold ${
-                        s.probability >= 60 ? 'text-green-400' : s.probability >= 45 ? 'text-yellow-400' : 'text-gray-400'
-                      }`}>{s.probability}%</div>
-                      <div className="text-[10px] text-gray-500">вероятность</div>
-                    </div>
+                    <div><span className="font-bold text-lg">{s.symbol}</span><span className={`ml-2 px-2 py-0.5 rounded text-xs font-bold ${s.action === 'BUY' ? 'bg-green-600' : 'bg-red-600'}`}>{s.action}</span></div>
+                    <div className="text-right"><div className={`text-lg font-bold ${s.probability >= 60 ? 'text-green-400' : s.probability >= 45 ? 'text-yellow-400' : 'text-gray-400'}`}>{s.probability}%</div></div>
                   </div>
                   <div className="text-2xl font-bold mb-3">${formatPrice(s.price)}</div>
                   <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
-                    <div className="bg-black/40 rounded p-2">
-                      <div className="text-gray-500">TP (+1%)</div>
-                      <div className="text-green-400 font-bold">${formatPrice(s.tp)}</div>
-                    </div>
-                    <div className="bg-black/40 rounded p-2">
-                      <div className="text-gray-500">SL (-0.3%)</div>
-                      <div className="text-red-400 font-bold">${formatPrice(s.sl)}</div>
-                    </div>
+                    <div className="bg-black/40 rounded p-2"><div className="text-gray-500">TP (+1%)</div><div className="text-green-400 font-bold">${formatPrice(s.tp)}</div></div>
+                    <div className="bg-black/40 rounded p-2"><div className="text-gray-500">SL (-0.3%)</div><div className="text-red-400 font-bold">${formatPrice(s.sl)}</div></div>
                   </div>
                   <div className="grid grid-cols-5 gap-1 text-[10px]">
-                    <div className="bg-black/30 rounded p-1.5 text-center">
-                      <div className="text-gray-500">RSI</div>
-                      <div className={s.rsi < 30 ? 'text-green-400' : s.rsi > 70 ? 'text-red-400' : 'text-white'}>{s.rsi}</div>
-                    </div>
-                    <div className="bg-black/30 rounded p-1.5 text-center">
-                      <div className="text-gray-500">STOCH</div>
-                      <div className={s.stoch < 20 ? 'text-green-400' : s.stoch > 80 ? 'text-red-400' : 'text-white'}>{s.stoch}</div>
-                    </div>
-                    <div className="bg-black/30 rounded p-1.5 text-center">
-                      <div className="text-gray-500">ADX</div>
-                      <div className="text-white">{s.adx}</div>
-                    </div>
-                    <div className="bg-black/30 rounded p-1.5 text-center">
-                      <div className="text-gray-500">MACD</div>
-                      <div className={s.macd > 0 ? 'text-green-400' : 'text-red-400'}>{s.macd.toFixed(4)}</div>
-                    </div>
-                    <div className="bg-black/30 rounded p-1.5 text-center">
-                      <div className="text-gray-500">ATR</div>
-                      <div className="text-white">{s.atr.toFixed(4)}</div>
-                    </div>
+                    {[['RSI', s.rsi, s.rsi < 30 ? 'text-green-400' : s.rsi > 70 ? 'text-red-400' : ''], ['STOCH', s.stoch, s.stoch < 20 ? 'text-green-400' : s.stoch > 80 ? 'text-red-400' : ''], ['ADX', s.adx, ''], ['MACD', s.macd.toFixed(4), s.macd > 0 ? 'text-green-400' : 'text-red-400'], ['ATR', s.atr.toFixed(4), '']].map(([label, value, color]) => (
+                      <div key={label as string} className="bg-black/30 rounded p-1.5 text-center">
+                        <div className="text-gray-500">{label}</div>
+                        <div className={color as string || 'text-white'}>{value}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ))}
@@ -460,27 +378,11 @@ const App = () => {
 
             {scanHistory.length > 0 && (
               <div className="mt-8">
-                <h2 className="text-lg font-bold text-gray-400 mb-3">📜 История сканирований</h2>
+                <h2 className="text-lg font-bold text-gray-400 mb-3">📜 История</h2>
                 <div className="bg-black/40 rounded-xl border border-gray-800 overflow-hidden overflow-x-auto">
-                  <table className="w-full text-sm min-w-[500px]">
-                    <thead>
-                      <tr className="border-b border-gray-800 text-gray-500">
-                        <th className="py-2 px-4 text-left">Время</th>
-                        <th className="py-2 px-4">Сигналов</th>
-                        <th className="py-2 px-4">BUY</th>
-                        <th className="py-2 px-4">SELL</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {scanHistory.map((h, i) => (
-                        <tr key={i} className="border-b border-gray-800/50 text-center">
-                          <td className="py-2 px-4 text-left text-gray-400">{h.time}</td>
-                          <td className="py-2 px-4 text-green-400 font-bold">{h.signals}</td>
-                          <td className="py-2 px-4 text-green-400">{h.buyCount}</td>
-                          <td className="py-2 px-4 text-red-400">{h.sellCount}</td>
-                        </tr>
-                      ))}
-                    </tbody>
+                  <table className="w-full text-sm min-w-[400px]">
+                    <thead><tr className="border-b border-gray-800 text-gray-500"><th className="py-2 px-4 text-left">Время</th><th className="py-2 px-4">Сигналов</th><th className="py-2 px-4">BUY</th><th className="py-2 px-4">SELL</th></tr></thead>
+                    <tbody>{scanHistory.map((h, i) => (<tr key={i} className="border-b border-gray-800/50 text-center"><td className="py-2 px-4 text-left text-gray-400">{h.time}</td><td className="py-2 px-4 text-green-400 font-bold">{h.signals}</td><td className="py-2 px-4 text-green-400">{h.buyCount}</td><td className="py-2 px-4 text-red-400">{h.sellCount}</td></tr>))}</tbody>
                   </table>
                 </div>
               </div>
@@ -492,7 +394,6 @@ const App = () => {
           <div className="text-center py-20 text-gray-600">
             <div className="text-6xl mb-4">🤖</div>
             <div className="text-lg">Нажми "Сканировать" для поиска сигналов</div>
-            <div className="text-sm mt-2">Сканер будет искать пока не найдёт сигналы</div>
           </div>
         )}
       </div>
