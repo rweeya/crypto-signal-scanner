@@ -52,7 +52,7 @@ interface ScanResult {
   sellCount: number;
 }
 
-const AI_TOKEN = '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';
+const AI_TOKEN = import.meta.env.VITE_AI_TOKEN || '';
 
 const calcRSI = (prices: number[], period: number = 14): number => {
   if (prices.length < period + 1) return 50;
@@ -144,6 +144,7 @@ const App = () => {
   const [totalScanned, setTotalScanned] = useState(0);
   const [scanCount, setScanCount] = useState(0);
   const [marketMood, setMarketMood] = useState({ buyPct: 50, sellPct: 50 });
+  const [attemptInfo, setAttemptInfo] = useState('');
   const priceCache = useRef<Map<string, number[]>>(new Map());
 
   const formatPrice = (p: number) => p >= 100 ? p.toFixed(2) : p >= 1 ? p.toFixed(4) : p.toFixed(6);
@@ -155,109 +156,141 @@ const App = () => {
 
   const scan = useCallback(async () => {
     setScanning(true);
-    const newSignals: Signal[] = [];
+    setSignals([]);
+    let found = false;
+    let attempts = 0;
+    const maxAttempts = 15;
 
-    try {
-      const [priceRes, volumeRes] = await Promise.all([
-        fetch('https://api.binance.com/api/v3/ticker/price'),
-        fetch('https://api.binance.com/api/v3/ticker/24hr')
-      ]);
-      
-      const allPrices = await priceRes.json();
-      const volumeData = await volumeRes.json();
-      
-      const topByVolume = new Set(
-        volumeData
-          .filter((t: any) => t.symbol.endsWith('USDT'))
-          .sort((a: any, b: any) => parseFloat(b.volume) - parseFloat(a.volume))
-          .slice(0, 100)
-          .map((t: any) => t.symbol.replace('USDT', '/USDT'))
-      );
+    while (!found && attempts < maxAttempts) {
+      const newSignals: Signal[] = [];
+      attempts++;
+      setAttemptInfo(`Поиск сигналов... Попытка ${attempts}/${maxAttempts}`);
 
-      let scannedCount = 0;
+      try {
+        const [priceRes, volumeRes] = await Promise.all([
+          fetch('https://api.binance.com/api/v3/ticker/price'),
+          fetch('https://api.binance.com/api/v3/ticker/24hr')
+        ]);
+        
+        const allPrices = await priceRes.json();
+        const volumeData = await volumeRes.json();
+        
+        const topByVolume = new Set(
+          volumeData
+            .filter((t: any) => t.symbol.endsWith('USDT'))
+            .sort((a: any, b: any) => parseFloat(b.volume) - parseFloat(a.volume))
+            .slice(0, 100)
+            .map((t: any) => t.symbol.replace('USDT', '/USDT'))
+        );
 
-      for (const sym of SYMBOLS) {
-        if (!topByVolume.has(sym)) continue;
+        let scannedCount = 0;
 
-        const binanceSym = sym.replace('/', '');
-        const ticker = allPrices.find((t: any) => t.symbol === binanceSym);
-        if (!ticker) continue;
+        for (const sym of SYMBOLS) {
+          if (!topByVolume.has(sym)) continue;
 
-        const price = parseFloat(ticker.price);
-        if (!price) continue;
+          const binanceSym = sym.replace('/', '');
+          const ticker = allPrices.find((t: any) => t.symbol === binanceSym);
+          if (!ticker) continue;
 
-        let history = priceCache.current.get(sym) || [];
-        history.push(price);
-        if (history.length > 200) history = history.slice(-200);
-        priceCache.current.set(sym, history);
+          const price = parseFloat(ticker.price);
+          if (!price) continue;
 
-        if (history.length < 50) continue;
+          let history = priceCache.current.get(sym) || [];
+          history.push(price);
+          if (history.length > 200) history = history.slice(-200);
+          priceCache.current.set(sym, history);
 
-        const rsi = calcRSI(history);
-        const stoch = calcStochastic(history);
-        const adx = calcADX(history);
-        const macd = calcMACD(history);
-        const ema20 = calcEMA(history, 20);
-        const atr = calcATR(history);
+          if (history.length < 50) continue;
 
-        if (atr / price < 0.002) continue;
+          const rsi = calcRSI(history);
+          const stoch = calcStochastic(history);
+          const adx = calcADX(history);
+          const macd = calcMACD(history);
+          const ema20 = calcEMA(history, 20);
+          const atr = calcATR(history);
 
-        scannedCount++;
+          if (atr / price < 0.002) continue;
 
-        if (rsi < 40 && stoch < 30 && macd > 0 && price > ema20 && adx > 20) {
-          const strength: 1 | 2 | 3 = rsi < 25 && stoch < 15 ? 3 : rsi < 32 ? 2 : 1;
-          const baseProb = strength === 3 ? 75 : strength === 2 ? 60 : 45;
-          newSignals.push({
-            symbol: sym, action: 'BUY', price, strength, probability: baseProb,
-            rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
-            tp: price * 1.01, sl: price * 0.997
-          });
-        } else if (rsi > 60 && stoch > 70 && macd < 0 && price < ema20 && adx > 20) {
-          const strength: 1 | 2 | 3 = rsi > 75 && stoch > 85 ? 3 : rsi > 68 ? 2 : 1;
-          const baseProb = strength === 3 ? 75 : strength === 2 ? 60 : 45;
-          newSignals.push({
-            symbol: sym, action: 'SELL', price, strength, probability: baseProb,
-            rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
-            tp: price * 0.99, sl: price * 1.003
-          });
+          scannedCount++;
+
+          if (rsi < 40 && stoch < 30 && macd > 0 && price > ema20 && adx > 20) {
+            const strength: 1 | 2 | 3 = rsi < 25 && stoch < 15 ? 3 : rsi < 32 ? 2 : 1;
+            const baseProb = strength === 3 ? 75 : strength === 2 ? 60 : 45;
+            newSignals.push({
+              symbol: sym, action: 'BUY', price, strength, probability: baseProb,
+              rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
+              tp: price * 1.01, sl: price * 0.997
+            });
+          } else if (rsi > 60 && stoch > 70 && macd < 0 && price < ema20 && adx > 20) {
+            const strength: 1 | 2 | 3 = rsi > 75 && stoch > 85 ? 3 : rsi > 68 ? 2 : 1;
+            const baseProb = strength === 3 ? 75 : strength === 2 ? 60 : 45;
+            newSignals.push({
+              symbol: sym, action: 'SELL', price, strength, probability: baseProb,
+              rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
+              tp: price * 0.99, sl: price * 1.003
+            });
+          }
         }
+
+        if (newSignals.length > 0) {
+          found = true;
+          const sorted = newSignals.sort((a, b) => b.probability - a.probability);
+          
+          if (AI_TOKEN && sorted.length > 0) {
+            setAttemptInfo('AI анализирует сигналы...');
+            for (let i = 0; i < Math.min(3, sorted.length); i++) {
+              const s = sorted[i];
+              const aiProb = await getAIProbability(s.symbol, s.action, s.rsi, s.stoch, s.adx);
+              s.probability = Math.round((s.probability + aiProb) / 2);
+              s.aiVerdict = aiProb > 60 ? '✅ AI подтверждает' : aiProb > 40 ? '⚠️ AI сомневается' : '❌ AI против';
+            }
+          }
+
+          const buyCount = sorted.filter(s => s.action === 'BUY').length;
+          const sellCount = sorted.filter(s => s.action === 'SELL').length;
+          const total = buyCount + sellCount || 1;
+
+          setMarketMood({
+            buyPct: Math.round((buyCount / total) * 100),
+            sellPct: Math.round((sellCount / total) * 100)
+          });
+
+          setTotalScanned(scannedCount);
+          setSignals(sorted);
+          setScanCount(prev => prev + 1);
+          setAttemptInfo('');
+
+          const result: ScanResult = {
+            time: new Date().toLocaleTimeString(),
+            total: scannedCount,
+            signals: sorted.length,
+            buyCount,
+            sellCount
+          };
+          setScanHistory(prev => [result, ...prev].slice(0, 20));
+        }
+      } catch (e) {
+        console.error('Ошибка сканирования:', e);
       }
 
-      const sorted = newSignals.sort((a, b) => b.probability - a.probability);
-      
-      if (AI_TOKEN && sorted.length > 0) {
-        for (let i = 0; i < Math.min(3, sorted.length); i++) {
-          const s = sorted[i];
-          const aiProb = await getAIProbability(s.symbol, s.action, s.rsi, s.stoch, s.adx);
-          s.probability = Math.round((s.probability + aiProb) / 2);
-          s.aiVerdict = aiProb > 60 ? '✅ AI подтверждает' : aiProb > 40 ? '⚠️ AI сомневается' : '❌ AI против';
-        }
+      if (!found && attempts < maxAttempts) {
+        await new Promise(r => setTimeout(r, 3000));
       }
+    }
 
-      const buyCount = sorted.filter(s => s.action === 'BUY').length;
-      const sellCount = sorted.filter(s => s.action === 'SELL').length;
-      const total = buyCount + sellCount || 1;
-
-      setMarketMood({
-        buyPct: Math.round((buyCount / total) * 100),
-        sellPct: Math.round((sellCount / total) * 100)
-      });
-
-      setTotalScanned(scannedCount);
-      setSignals(sorted);
+    if (!found) {
+      setAttemptInfo('Сигналы не найдены после 15 попыток');
       setScanCount(prev => prev + 1);
-
       const result: ScanResult = {
         time: new Date().toLocaleTimeString(),
-        total: scannedCount,
-        signals: sorted.length,
-        buyCount,
-        sellCount
+        total: 0,
+        signals: 0,
+        buyCount: 0,
+        sellCount: 0
       };
       setScanHistory(prev => [result, ...prev].slice(0, 20));
-    } catch (e) {
-      console.error('Ошибка сканирования:', e);
     }
+
     setScanning(false);
   }, []);
 
@@ -283,208 +316,203 @@ const App = () => {
                   : 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 shadow-lg shadow-purple-500/20'
               }`}
             >
-              {scanning ? '⏳ AI АНАЛИЗ...' : '🤖 СКАНИРОВАТЬ С AI'}
+              {scanning ? '⏳ ИЩУ СИГНАЛЫ...' : '🤖 СКАНИРОВАТЬ С AI'}
             </button>
           </div>
         </div>
       </header>
 
       <div className="container mx-auto px-4 py-6">
-        {scanCount > 0 && (
-          <div className="bg-black/40 rounded-xl p-4 border border-purple-500/20 mb-6">
-            <h2 className="text-sm text-gray-400 mb-3">📊 СВОДКА РЫНКА</h2>
-            <div className="flex gap-4 items-center">
-              <div className="flex-1">
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-green-400">BUY {marketMood.buyPct}%</span>
-                  <span className="text-red-400">SELL {marketMood.sellPct}%</span>
-                </div>
-                <div className="h-2 bg-gray-800 rounded-full overflow-hidden flex">
-                  <div className="h-full bg-green-500 transition-all" style={{ width: `${marketMood.buyPct}%` }} />
-                  <div className="h-full bg-red-500 transition-all" style={{ width: `${marketMood.sellPct}%` }} />
-                </div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold">{filteredSignals.length}</div>
-                <div className="text-xs text-gray-500">сигналов</div>
-              </div>
-            </div>
+        {scanning && (
+          <div className="text-center py-10">
+            <div className="text-4xl mb-4 animate-pulse">🔍</div>
+            <div className="text-lg text-purple-400">{attemptInfo || 'Поиск сигналов...'}</div>
+            <div className="text-sm text-gray-500 mt-2">Сканирую 100 топовых активов</div>
           </div>
         )}
 
-        {scanCount > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-            <div className="bg-black/50 rounded-xl p-3 border border-purple-500/20 text-center">
-              <div className="text-xs text-gray-500">Просканировано</div>
-              <div className="text-xl font-bold">{totalScanned}</div>
+        {!scanning && scanCount > 0 && (
+          <>
+            <div className="bg-black/40 rounded-xl p-4 border border-purple-500/20 mb-6">
+              <h2 className="text-sm text-gray-400 mb-3">📊 СВОДКА РЫНКА</h2>
+              <div className="flex gap-4 items-center">
+                <div className="flex-1">
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-green-400">BUY {marketMood.buyPct}%</span>
+                    <span className="text-red-400">SELL {marketMood.sellPct}%</span>
+                  </div>
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden flex">
+                    <div className="h-full bg-green-500 transition-all" style={{ width: `${marketMood.buyPct}%` }} />
+                    <div className="h-full bg-red-500 transition-all" style={{ width: `${marketMood.sellPct}%` }} />
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold">{filteredSignals.length}</div>
+                  <div className="text-xs text-gray-500">сигналов</div>
+                </div>
+              </div>
             </div>
-            <div className="bg-black/50 rounded-xl p-3 border border-green-500/20 text-center">
-              <div className="text-xs text-gray-500">BUY</div>
-              <div className="text-xl font-bold text-green-400">{signals.filter(s => s.action === 'BUY').length}</div>
-            </div>
-            <div className="bg-black/50 rounded-xl p-3 border border-red-500/20 text-center">
-              <div className="text-xs text-gray-500">SELL</div>
-              <div className="text-xl font-bold text-red-400">{signals.filter(s => s.action === 'SELL').length}</div>
-            </div>
-            <div className="bg-black/50 rounded-xl p-3 border border-yellow-500/20 text-center">
-              <div className="text-xs text-gray-500">Высокая вероятность</div>
-              <div className="text-xl font-bold text-yellow-400">{signals.filter(s => s.probability >= 60).length}</div>
-            </div>
-            <div className="bg-black/50 rounded-xl p-3 border border-blue-500/20 text-center">
-              <div className="text-xs text-gray-500">Сканирований</div>
-              <div className="text-xl font-bold text-blue-400">{scanCount}</div>
-            </div>
-          </div>
-        )}
 
-        <div className="flex flex-wrap gap-3 mb-6">
-          <div className="flex gap-1 bg-black/40 rounded-lg p-1">
-            {(['ALL', 'BUY', 'SELL'] as const).map(f => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                  filter === f ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'
-                }`}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+              <div className="bg-black/50 rounded-xl p-3 border border-purple-500/20 text-center">
+                <div className="text-xs text-gray-500">Просканировано</div>
+                <div className="text-xl font-bold">{totalScanned}</div>
+              </div>
+              <div className="bg-black/50 rounded-xl p-3 border border-green-500/20 text-center">
+                <div className="text-xs text-gray-500">BUY</div>
+                <div className="text-xl font-bold text-green-400">{signals.filter(s => s.action === 'BUY').length}</div>
+              </div>
+              <div className="bg-black/50 rounded-xl p-3 border border-red-500/20 text-center">
+                <div className="text-xs text-gray-500">SELL</div>
+                <div className="text-xl font-bold text-red-400">{signals.filter(s => s.action === 'SELL').length}</div>
+              </div>
+              <div className="bg-black/50 rounded-xl p-3 border border-yellow-500/20 text-center">
+                <div className="text-xs text-gray-500">Высокая вероятность</div>
+                <div className="text-xl font-bold text-yellow-400">{signals.filter(s => s.probability >= 60).length}</div>
+              </div>
+              <div className="bg-black/50 rounded-xl p-3 border border-blue-500/20 text-center">
+                <div className="text-xs text-gray-500">Сканирований</div>
+                <div className="text-xl font-bold text-blue-400">{scanCount}</div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-3 mb-6">
+              <div className="flex gap-1 bg-black/40 rounded-lg p-1">
+                {(['ALL', 'BUY', 'SELL'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setFilter(f)}
+                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                      filter === f ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {f === 'ALL' ? 'Все' : f}
+                  </button>
+                ))}
+              </div>
+              <select
+                value={minProbability}
+                onChange={e => setMinProbability(Number(e.target.value))}
+                className="bg-black/40 border border-gray-700 rounded-lg px-3 py-1.5 text-sm"
               >
-                {f === 'ALL' ? 'Все' : f}
-              </button>
-            ))}
-          </div>
-          <select
-            value={minProbability}
-            onChange={e => setMinProbability(Number(e.target.value))}
-            className="bg-black/40 border border-gray-700 rounded-lg px-3 py-1.5 text-sm"
-          >
-            <option value={0}>Все вероятности</option>
-            <option value={50}>≥ 50%</option>
-            <option value={60}>≥ 60%</option>
-            <option value={70}>≥ 70%</option>
-          </select>
-        </div>
+                <option value={0}>Все вероятности</option>
+                <option value={50}>≥ 50%</option>
+                <option value={60}>≥ 60%</option>
+                <option value={70}>≥ 70%</option>
+              </select>
+            </div>
 
-        {scanCount === 0 && !scanning && (
+            {filteredSignals.length === 0 && (
+              <div className="text-center py-10 text-gray-500">
+                <div className="text-4xl mb-3">📭</div>
+                <div>Нет сигналов с вероятностью ≥ {minProbability}%</div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredSignals.map((s, i) => (
+                <div
+                  key={i}
+                  onClick={() => openBybit(s.symbol)}
+                  className={`rounded-xl p-4 border cursor-pointer transition-all hover:scale-[1.02] ${
+                    s.action === 'BUY'
+                      ? 'bg-gradient-to-br from-green-950/30 to-black border-green-500/30 hover:border-green-400/50'
+                      : 'bg-gradient-to-br from-red-950/30 to-black border-red-500/30 hover:border-red-400/50'
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <span className="font-bold text-lg">{s.symbol}</span>
+                      <span className={`ml-2 px-2 py-0.5 rounded text-xs font-bold ${
+                        s.action === 'BUY' ? 'bg-green-600' : 'bg-red-600'
+                      }`}>{s.action}</span>
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-lg font-bold ${
+                        s.probability >= 60 ? 'text-green-400' : s.probability >= 45 ? 'text-yellow-400' : 'text-gray-400'
+                      }`}>{s.probability}%</div>
+                      <div className="text-[10px] text-gray-500">вероятность</div>
+                    </div>
+                  </div>
+                  <div className="text-2xl font-bold mb-3">${formatPrice(s.price)}</div>
+                  {s.aiVerdict && (
+                    <div className={`mb-3 text-xs px-3 py-1.5 rounded-lg ${
+                      s.aiVerdict.includes('✅') ? 'bg-green-500/10 text-green-400' :
+                      s.aiVerdict.includes('❌') ? 'bg-red-500/10 text-red-400' :
+                      'bg-yellow-500/10 text-yellow-400'
+                    }`}>{s.aiVerdict}</div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+                    <div className="bg-black/40 rounded p-2">
+                      <div className="text-gray-500">TP (+1%)</div>
+                      <div className="text-green-400 font-bold">${formatPrice(s.tp)}</div>
+                    </div>
+                    <div className="bg-black/40 rounded p-2">
+                      <div className="text-gray-500">SL (-0.3%)</div>
+                      <div className="text-red-400 font-bold">${formatPrice(s.sl)}</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-5 gap-1 text-[10px]">
+                    <div className="bg-black/30 rounded p-1.5 text-center">
+                      <div className="text-gray-500">RSI</div>
+                      <div className={s.rsi < 30 ? 'text-green-400' : s.rsi > 70 ? 'text-red-400' : 'text-white'}>{s.rsi}</div>
+                    </div>
+                    <div className="bg-black/30 rounded p-1.5 text-center">
+                      <div className="text-gray-500">STOCH</div>
+                      <div className={s.stoch < 20 ? 'text-green-400' : s.stoch > 80 ? 'text-red-400' : 'text-white'}>{s.stoch}</div>
+                    </div>
+                    <div className="bg-black/30 rounded p-1.5 text-center">
+                      <div className="text-gray-500">ADX</div>
+                      <div className="text-white">{s.adx}</div>
+                    </div>
+                    <div className="bg-black/30 rounded p-1.5 text-center">
+                      <div className="text-gray-500">MACD</div>
+                      <div className={s.macd > 0 ? 'text-green-400' : 'text-red-400'}>{s.macd.toFixed(4)}</div>
+                    </div>
+                    <div className="bg-black/30 rounded p-1.5 text-center">
+                      <div className="text-gray-500">ATR</div>
+                      <div className="text-white">{s.atr.toFixed(4)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {scanHistory.length > 0 && (
+              <div className="mt-8">
+                <h2 className="text-lg font-bold text-gray-400 mb-3">📜 История сканирований</h2>
+                <div className="bg-black/40 rounded-xl border border-gray-800 overflow-hidden overflow-x-auto">
+                  <table className="w-full text-sm min-w-[500px]">
+                    <thead>
+                      <tr className="border-b border-gray-800 text-gray-500">
+                        <th className="py-2 px-4 text-left">Время</th>
+                        <th className="py-2 px-4">Сигналов</th>
+                        <th className="py-2 px-4">BUY</th>
+                        <th className="py-2 px-4">SELL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scanHistory.map((h, i) => (
+                        <tr key={i} className="border-b border-gray-800/50 text-center">
+                          <td className="py-2 px-4 text-left text-gray-400">{h.time}</td>
+                          <td className="py-2 px-4 text-green-400 font-bold">{h.signals}</td>
+                          <td className="py-2 px-4 text-green-400">{h.buyCount}</td>
+                          <td className="py-2 px-4 text-red-400">{h.sellCount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {!scanning && scanCount === 0 && (
           <div className="text-center py-20 text-gray-600">
             <div className="text-6xl mb-4">🤖</div>
-            <div className="text-lg">Нажми "Сканировать с AI" для анализа рынка</div>
-            <div className="text-sm mt-2">AI проанализирует топ-3 сигнала</div>
-          </div>
-        )}
-
-        {scanCount > 0 && filteredSignals.length === 0 && !scanning && (
-          <div className="text-center py-10 text-gray-500">
-            <div className="text-4xl mb-3">📭</div>
-            <div>Нет сигналов с вероятностью ≥ {minProbability}%</div>
-            <div className="text-sm mt-2">Попробуй снизить порог вероятности</div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredSignals.map((s, i) => (
-            <div
-              key={i}
-              onClick={() => openBybit(s.symbol)}
-              className={`rounded-xl p-4 border cursor-pointer transition-all hover:scale-[1.02] ${
-                s.action === 'BUY'
-                  ? 'bg-gradient-to-br from-green-950/30 to-black border-green-500/30 hover:border-green-400/50'
-                  : 'bg-gradient-to-br from-red-950/30 to-black border-red-500/30 hover:border-red-400/50'
-              }`}
-            >
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <span className="font-bold text-lg">{s.symbol}</span>
-                  <span className={`ml-2 px-2 py-0.5 rounded text-xs font-bold ${
-                    s.action === 'BUY' ? 'bg-green-600' : 'bg-red-600'
-                  }`}>
-                    {s.action}
-                  </span>
-                </div>
-                <div className="text-right">
-                  <div className={`text-lg font-bold ${
-                    s.probability >= 60 ? 'text-green-400' : s.probability >= 45 ? 'text-yellow-400' : 'text-gray-400'
-                  }`}>
-                    {s.probability}%
-                  </div>
-                  <div className="text-[10px] text-gray-500">вероятность</div>
-                </div>
-              </div>
-
-              <div className="text-2xl font-bold mb-3">${formatPrice(s.price)}</div>
-
-              {s.aiVerdict && (
-                <div className={`mb-3 text-xs px-3 py-1.5 rounded-lg ${
-                  s.aiVerdict.includes('✅') ? 'bg-green-500/10 text-green-400' :
-                  s.aiVerdict.includes('❌') ? 'bg-red-500/10 text-red-400' :
-                  'bg-yellow-500/10 text-yellow-400'
-                }`}>
-                  {s.aiVerdict}
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
-                <div className="bg-black/40 rounded p-2">
-                  <div className="text-gray-500">TP (+1%)</div>
-                  <div className="text-green-400 font-bold">${formatPrice(s.tp)}</div>
-                </div>
-                <div className="bg-black/40 rounded p-2">
-                  <div className="text-gray-500">SL (-0.3%)</div>
-                  <div className="text-red-400 font-bold">${formatPrice(s.sl)}</div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-5 gap-1 text-[10px]">
-                <div className="bg-black/30 rounded p-1.5 text-center">
-                  <div className="text-gray-500">RSI</div>
-                  <div className={s.rsi < 30 ? 'text-green-400' : s.rsi > 70 ? 'text-red-400' : 'text-white'}>{s.rsi}</div>
-                </div>
-                <div className="bg-black/30 rounded p-1.5 text-center">
-                  <div className="text-gray-500">STOCH</div>
-                  <div className={s.stoch < 20 ? 'text-green-400' : s.stoch > 80 ? 'text-red-400' : 'text-white'}>{s.stoch}</div>
-                </div>
-                <div className="bg-black/30 rounded p-1.5 text-center">
-                  <div className="text-gray-500">ADX</div>
-                  <div className="text-white">{s.adx}</div>
-                </div>
-                <div className="bg-black/30 rounded p-1.5 text-center">
-                  <div className="text-gray-500">MACD</div>
-                  <div className={s.macd > 0 ? 'text-green-400' : 'text-red-400'}>{s.macd.toFixed(4)}</div>
-                </div>
-                <div className="bg-black/30 rounded p-1.5 text-center">
-                  <div className="text-gray-500">ATR</div>
-                  <div className="text-white">{s.atr.toFixed(4)}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {scanHistory.length > 0 && (
-          <div className="mt-8">
-            <h2 className="text-lg font-bold text-gray-400 mb-3">📜 История сканирований</h2>
-            <div className="bg-black/40 rounded-xl border border-gray-800 overflow-hidden overflow-x-auto">
-              <table className="w-full text-sm min-w-[500px]">
-                <thead>
-                  <tr className="border-b border-gray-800 text-gray-500">
-                    <th className="py-2 px-4 text-left">Время</th>
-                    <th className="py-2 px-4">Просканировано</th>
-                    <th className="py-2 px-4">Сигналов</th>
-                    <th className="py-2 px-4">BUY</th>
-                    <th className="py-2 px-4">SELL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scanHistory.map((h, i) => (
-                    <tr key={i} className="border-b border-gray-800/50 text-center">
-                      <td className="py-2 px-4 text-left text-gray-400">{h.time}</td>
-                      <td className="py-2 px-4">{h.total}</td>
-                      <td className="py-2 px-4 text-green-400 font-bold">{h.signals}</td>
-                      <td className="py-2 px-4 text-green-400">{h.buyCount}</td>
-                      <td className="py-2 px-4 text-red-400">{h.sellCount}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <div className="text-lg">Нажми "Сканировать с AI" для поиска сигналов</div>
+            <div className="text-sm mt-2">Сканер будет искать пока не найдёт сигналы</div>
           </div>
         )}
       </div>
