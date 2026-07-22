@@ -1,681 +1,405 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useCallback, useRef } from 'react';
 
-// ============================================
-// TYPES
-// ============================================
-type SignalDirection = 'BUY' | 'SELL' | 'NEUTRAL';
-
-interface IndicatorValues {
-  rsi: number;
-  stochastic: number;
-  macd: number;
-  macdSignal: number;
-  macdHistogram: number;
-  adx: number;
-  ema20: number;
-  ema50: number;
-  bollingerUpper: number;
-  bollingerLower: number;
-  obv: number;
-  volume: number;
-}
+// ==================== 150+ АКТИВОВ ====================
+const SYMBOLS = [
+  'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'ADA/USDT',
+  'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT', 'LINK/USDT', 'LTC/USDT', 'UNI/USDT', 'ATOM/USDT',
+  'ETC/USDT', 'FIL/USDT', 'APT/USDT', 'ARB/USDT', 'OP/USDT', 'SUI/USDT', 'NEAR/USDT',
+  'INJ/USDT', 'IMX/USDT', 'HBAR/USDT', 'VET/USDT', 'GRT/USDT', 'RNDR/USDT', 'MKR/USDT',
+  'AAVE/USDT', 'ALGO/USDT', 'FTM/USDT', 'SAND/USDT', 'MANA/USDT', 'GALA/USDT', 'AXS/USDT',
+  'CHZ/USDT', 'EOS/USDT', 'ZEC/USDT', 'COMP/USDT', 'ICP/USDT', 'STX/USDT', 'KAS/USDT',
+  'RUNE/USDT', 'EGLD/USDT', 'FLOW/USDT', 'PEPE/USDT', 'WIF/USDT', 'BONK/USDT', 'SHIB/USDT',
+  'SEI/USDT', 'WLD/USDT', 'TIA/USDT', 'JUP/USDT', 'PYTH/USDT', 'ENA/USDT', 'FET/USDT',
+  'BEAM/USDT', 'BLUR/USDT', 'ORDI/USDT', 'PENDLE/USDT', 'ENS/USDT', 'LDO/USDT',
+  'TON/USDT', 'NOT/USDT', 'MEW/USDT', 'POPCAT/USDT', 'RAY/USDT', 'JTO/USDT',
+  'TRX/USDT', 'XLM/USDT', 'XTZ/USDT', 'CAKE/USDT', '1INCH/USDT', 'SNX/USDT', 'CRV/USDT',
+  'ZRO/USDT', 'ZK/USDT', 'ALT/USDT', 'PORTAL/USDT', 'AI/USDT', 'BOME/USDT',
+  'TURBO/USDT', 'MEME/USDT', 'BANANA/USDT', 'RARE/USDT', 'BB/USDT', 'IO/USDT',
+  'PIXEL/USDT', 'SAGA/USDT', 'DYM/USDT', 'OMNI/USDT', 'REZ/USDT', 'ETHFI/USDT',
+  'STRK/USDT', 'GMX/USDT', 'LRC/USDT', 'SUPER/USDT', 'MINA/USDT', 'YGG/USDT',
+  'CKB/USDT', 'SUSHI/USDT', 'THETA/USDT', 'APE/USDT', 'BAL/USDT', 'ENJ/USDT',
+  'HOT/USDT', 'JASMY/USDT', 'KDA/USDT', 'MAGIC/USDT', 'OCEAN/USDT', 'QNT/USDT',
+  'RVN/USDT', 'SKL/USDT', 'STORJ/USDT', 'UMA/USDT', 'WOO/USDT', 'ZIL/USDT',
+  'ZRX/USDT', 'ANKR/USDT', 'ASTR/USDT', 'BAND/USDT', 'CELR/USDT', 'DENT/USDT',
+  'DYDX/USDT', 'GLMR/USDT', 'ICX/USDT', 'IOST/USDT', 'IOTX/USDT', 'JOE/USDT',
+  'KNC/USDT', 'LINA/USDT', 'LPT/USDT', 'MOVR/USDT', 'NKN/USDT', 'OGN/USDT',
+  'OM/USDT', 'ONT/USDT', 'PERP/USDT', 'POWR/USDT', 'REN/USDT', 'ROSE/USDT',
+  'SFP/USDT', 'SPELL/USDT', 'SSV/USDT', 'SXP/USDT', 'TRB/USDT', 'TRU/USDT',
+  'VRA/USDT', 'WAXP/USDT'
+];
 
 interface Signal {
   symbol: string;
-  direction: SignalDirection;
+  action: 'BUY' | 'SELL';
   price: number;
-  strength: number;
-  indicators: IndicatorValues;
+  strength: 1 | 2 | 3;
+  rsi: number;
+  stoch: number;
+  adx: number;
+  macd: number;
+  ema20: number;
+  atr: number;
   tp: number;
   sl: number;
-  timestamp: number;
-  confidence: number;
 }
 
-interface ScanHistory {
-  timestamp: number;
-  totalSignals: number;
-  buySignals: number;
-  sellSignals: number;
+interface ScanResult {
+  time: string;
+  total: number;
+  signals: number;
+  buyCount: number;
+  sellCount: number;
 }
 
-// ============================================
-// VIP INDICATORS
-// ============================================
-const calculateBollingerBands = (prices: number[], period: number = 20, multiplier: number = 2) => {
-  if (prices.length < period) return { upper: prices[prices.length - 1] || 0, lower: prices[prices.length - 1] || 0 };
-  const recent = prices.slice(-period);
-  const sma = recent.reduce((a, b) => a + b, 0) / period;
-  const variance = recent.reduce((a, b) => a + Math.pow(b - sma, 2), 0) / period;
-  const std = Math.sqrt(variance);
-  return { upper: sma + multiplier * std, lower: sma - multiplier * std };
-};
-
-const calculateOBV = (prices: number[], volumes: number[]): number => {
-  if (prices.length < 2) return 0;
-  let obv = 0;
-  for (let i = 1; i < prices.length; i++) {
-    if (prices[i] > prices[i - 1]) obv += volumes[i] || 0;
-    else if (prices[i] < prices[i - 1]) obv -= volumes[i] || 0;
-  }
-  return obv;
-};
-
-// ============================================
-// INDICATOR CALCULATIONS
-// ============================================
-const calculateRSI = (prices: number[], period: number = 14): number => {
+// ==================== ИНДИКАТОРЫ ====================
+const calcRSI = (prices: number[], period: number = 14): number => {
   if (prices.length < period + 1) return 50;
-  const changes = prices.slice(1).map((p, i) => p - prices[i]);
-  const gains = changes.map(c => c > 0 ? c : 0);
-  const losses = changes.map(c => c < 0 ? -c : 0);
-  
-  let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  
-  for (let i = period; i < gains.length; i++) {
-    avgGain = (avgGain * (period - 1) + gains[i]) / period;
-    avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+  let gains = 0, losses = 0;
+  for (let i = prices.length - period; i < prices.length; i++) {
+    const diff = prices[i] - prices[i - 1];
+    if (diff >= 0) gains += diff; else losses -= diff;
   }
-  
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  if (losses === 0) return 100;
+  return Math.round(100 - 100 / (1 + (gains / period) / (losses / period)));
 };
 
-const calculateStochastic = (prices: number[], period: number = 14): number => {
-  if (prices.length < period) return 50;
-  const recent = prices.slice(-period);
-  const low = Math.min(...recent);
-  const high = Math.max(...recent);
-  const current = prices[prices.length - 1];
-  if (high === low) return 50;
-  return ((current - low) / (high - low)) * 100;
-};
-
-const calculateEMA = (prices: number[], period: number): number => {
+const calcEMA = (prices: number[], period: number): number => {
   if (prices.length < period) return prices[prices.length - 1] || 0;
   const k = 2 / (period + 1);
-  let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < prices.length; i++) {
-    ema = prices[i] * k + ema * (1 - k);
-  }
+  let ema = prices[0];
+  for (let i = 1; i < prices.length; i++) ema = (prices[i] - ema) * k + ema;
   return ema;
 };
 
-const calculateMACD = (prices: number[]): { macd: number; signal: number; histogram: number } => {
-  const ema12 = calculateEMA(prices, 12);
-  const ema26 = calculateEMA(prices, 26);
-  const macd = ema12 - ema26;
-  const macdValues = prices.slice(26).map((_, i) => {
-    const p = prices.slice(0, 26 + i);
-    return calculateEMA(p, 12) - calculateEMA(p, 26);
-  });
-  const signal = macdValues.length > 9 ? calculateEMA(macdValues, 9) : 0;
-  return { macd, signal, histogram: macd - signal };
+const calcMACD = (prices: number[]): number => {
+  if (prices.length < 35) return 0;
+  return parseFloat((calcEMA(prices, 12) - calcEMA(prices, 26)).toFixed(4));
 };
 
-const calculateADX = (prices: number[], period: number = 14): number => {
-  if (prices.length < period + 1) return 25;
-  const trs = [];
-  const plusDM = [];
-  const minusDM = [];
-  
+const calcADX = (prices: number[], period: number = 14): number => {
+  if (prices.length < period * 2) return 0;
+  const tr: number[] = [], plusDM: number[] = [], minusDM: number[] = [];
   for (let i = 1; i < prices.length; i++) {
-    const high = prices[i];
-    const low = prices[i];
-    const prevHigh = prices[i-1];
-    const prevLow = prices[i-1];
-    
-    const tr = Math.max(high - low, Math.abs(high - prevHigh), Math.abs(low - prevLow));
-    trs.push(tr);
-    
-    const upMove = high - prevHigh;
-    const downMove = prevLow - low;
-    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
-    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    const h = Math.max(prices[i], prices[i - 1]), l = Math.min(prices[i], prices[i - 1]);
+    const pH = Math.max(prices[i - 1], prices[i - 2] || prices[i - 1]);
+    const pL = Math.min(prices[i - 1], prices[i - 2] || prices[i - 1]);
+    tr.push(Math.max(h - l, Math.abs(h - prices[i - 1]), Math.abs(l - prices[i - 1])));
+    plusDM.push(h - pH > 0 && h - pH > pL - l ? h - pH : 0);
+    minusDM.push(pL - l > 0 && pL - l > h - pH ? pL - l : 0);
   }
-  
-  if (trs.length < period) return 25;
-  
-  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  let plusDI = plusDM.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  let minusDI = minusDM.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  
-  for (let i = period; i < trs.length; i++) {
-    atr = (atr * (period - 1) + trs[i]) / period;
-    plusDI = (plusDI * (period - 1) + plusDM[i]) / period;
-    minusDI = (minusDI * (period - 1) + minusDM[i]) / period;
-  }
-  
-  const dx = (Math.abs(plusDI - minusDI) / (plusDI + minusDI)) * 100;
-  return dx;
+  const smooth = (d: number[]) => { const k = 2 / (period + 1); let e = d[0]; for (let i = 1; i < d.length; i++) e = d[i] * k + e * (1 - k); return e; };
+  const atrVal = smooth(tr);
+  if (!atrVal) return 0;
+  return Math.abs(smooth(plusDM) - smooth(minusDM)) / (smooth(plusDM) + smooth(minusDM)) * 100;
 };
 
-// ============================================
-// ENHANCED SIGNAL GENERATION
-// ============================================
-const generateSignal = (symbol: string, prices: number[], volumes: number[]): Signal | null => {
-  if (prices.length < 50) return null;
-  
-  const rsi = calculateRSI(prices);
-  const stochastic = calculateStochastic(prices);
-  const macdData = calculateMACD(prices);
-  const adx = calculateADX(prices);
-  const ema20 = calculateEMA(prices, 20);
-  const ema50 = calculateEMA(prices, 50);
-  const bb = calculateBollingerBands(prices);
-  const obv = calculateOBV(prices, volumes);
-  const price = prices[prices.length - 1];
-  const volume = volumes[volumes.length - 1] || 0;
-  
-  const indicators: IndicatorValues = {
-    rsi,
-    stochastic,
-    macd: macdData.macd,
-    macdSignal: macdData.signal,
-    macdHistogram: macdData.histogram,
-    adx,
-    ema20,
-    ema50,
-    bollingerUpper: bb.upper,
-    bollingerLower: bb.lower,
-    obv,
-    volume
-  };
-  
-  let buyScore = 0;
-  let sellScore = 0;
-  let confidence = 0;
-  
-  // 1. RSI (30/70)
-  if (rsi < 30) { buyScore += 3; confidence += 5; }
-  else if (rsi > 70) { sellScore += 3; confidence += 5; }
-  else if (rsi < 40) { buyScore += 1; }
-  else if (rsi > 60) { sellScore += 1; }
-  
-  // 2. Stochastic (20/80)
-  if (stochastic < 20) { buyScore += 3; confidence += 4; }
-  else if (stochastic > 80) { sellScore += 3; confidence += 4; }
-  else if (stochastic < 35) { buyScore += 1; }
-  else if (stochastic > 65) { sellScore += 1; }
-  
-  // 3. MACD
-  if (macdData.histogram > 0 && macdData.macd > macdData.signal) { buyScore += 3; confidence += 5; }
-  else if (macdData.histogram < 0 && macdData.macd < macdData.signal) { sellScore += 3; confidence += 5; }
-  else if (macdData.macd > macdData.signal) { buyScore += 1; }
-  else if (macdData.macd < macdData.signal) { sellScore += 1; }
-  
-  // 4. ADX (тренд)
-  if (adx > 30) {
-    if (ema20 > ema50) { buyScore += 2; confidence += 3; }
-    else { sellScore += 2; confidence += 3; }
-  } else if (adx > 20) {
-    if (ema20 > ema50) buyScore += 1;
-    else sellScore += 1;
-  }
-  
-  // 5. EMA crossover
-  if (ema20 > ema50) buyScore += 2;
-  else if (ema20 < ema50) sellScore += 2;
-  
-  // 6. Bollinger Bands
-  if (price < bb.lower) { buyScore += 2; confidence += 3; }
-  else if (price > bb.upper) { sellScore += 2; confidence += 3; }
-  
-  // 7. OBV (объем)
-  if (obv > 0) buyScore += 1;
-  else if (obv < 0) sellScore += 1;
-  
-  // 8. Объем
-  const avgVolume = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-  if (volume > avgVolume * 1.5) {
-    if (buyScore > sellScore) { buyScore += 2; confidence += 4; }
-    else if (sellScore > buyScore) { sellScore += 2; confidence += 4; }
-  }
-  
-  let direction: SignalDirection = 'NEUTRAL';
-  let strength = 0;
-  
-  if (buyScore > sellScore && buyScore >= 4) {
-    direction = 'BUY';
-    strength = Math.min(Math.floor((buyScore + confidence / 10) / 1.8), 5);
-  } else if (sellScore > buyScore && sellScore >= 4) {
-    direction = 'SELL';
-    strength = Math.min(Math.floor((sellScore + confidence / 10) / 1.8), 5);
-  }
-  
-  if (direction === 'NEUTRAL' || strength < 2) return null;
-  
-  const tp = direction === 'BUY' ? price * 1.015 : price * 0.985;
-  const sl = direction === 'BUY' ? price * 0.995 : price * 1.005;
-  
-  return {
-    symbol,
-    direction,
-    price,
-    strength,
-    indicators,
-    tp,
-    sl,
-    timestamp: Date.now(),
-    confidence: Math.min(Math.round(confidence * 2.5), 100)
-  };
+const calcStochastic = (prices: number[], period: number = 14): number => {
+  if (prices.length < period) return 50;
+  const slice = prices.slice(-period);
+  const h = Math.max(...slice), l = Math.min(...slice);
+  if (h === l) return 50;
+  return ((prices[prices.length - 1] - l) / (h - l)) * 100;
 };
 
-// ============================================
-// OPTIMIZED API
-// ============================================
-const fetchBinanceData = async (symbols: string[]): Promise<any[]> => {
-  const results = [];
-  const batchSize = 5;
-  
-  for (let i = 0; i < symbols.length; i += batchSize) {
-    const batch = symbols.slice(i, i + batchSize);
-    const batchPromises = batch.map(async (symbol) => {
-      try {
-        const [klinesRes, tickerRes] = await Promise.all([
-          fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=60`),
-          fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`)
-        ]);
-        
-        const klinesData = await klinesRes.json();
-        const tickerData = await tickerRes.json();
-        
-        const prices = klinesData.map((k: any) => parseFloat(k[4]));
-        const volumes = klinesData.map((k: any) => parseFloat(k[5]));
-        
-        return {
-          symbol,
-          price: parseFloat(tickerData.lastPrice),
-          prices,
-          volumes
-        };
-      } catch (e) {
-        return null;
-      }
-    });
-    
-    const batchResults = await Promise.all(batchPromises);
-    results.push(...batchResults.filter(r => r !== null));
-    
-    await new Promise(resolve => setTimeout(resolve, 200));
+const calcATR = (prices: number[], period: number = 14): number => {
+  if (!prices || prices.length < period + 1) return 0;
+  const tr: number[] = [];
+  for (let i = 1; i < prices.length; i++) {
+    tr.push(Math.abs(prices[i] - prices[i - 1]));
   }
-  
-  return results;
+  let atr = tr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < tr.length; i++) {
+    atr = (atr * (period - 1) + tr[i]) / period;
+  }
+  return atr;
 };
 
-// ============================================
-// MAIN APP
-// ============================================
-const App: React.FC = () => {
+const App = () => {
   const [signals, setSignals] = useState<Signal[]>([]);
-  const [history, setHistory] = useState<ScanHistory[]>([]);
-  const [isScanning, setIsScanning] = useState(false);
-  const [filterDirection, setFilterDirection] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
-  const [minStrength, setMinStrength] = useState(2);
-  const [lastScanTime, setLastScanTime] = useState<number | null>(null);
-  const [scanProgress, setScanProgress] = useState(0);
-  const [scanStatus, setScanStatus] = useState('Готов к сканированию');
-  const abortControllerRef = useRef<AbortController | null>(null);
-  
-  useEffect(() => {
-    const saved = localStorage.getItem('scanHistory');
-    if (saved) {
-      try {
-        setHistory(JSON.parse(saved));
-      } catch (e) {}
-    }
-  }, []);
-  
-  useEffect(() => {
-    localStorage.setItem('scanHistory', JSON.stringify(history.slice(-20)));
-  }, [history]);
-  
-  const scanMarket = useCallback(async () => {
-    if (isScanning) return;
-    
-    abortControllerRef.current = new AbortController();
-    setIsScanning(true);
-    setScanProgress(0);
-    setScanStatus('Получение списка пар...');
-    
+  const [scanning, setScanning] = useState(false);
+  const [filter, setFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
+  const [minStrength, setMinStrength] = useState<1 | 2 | 3>(2);
+  const [scanHistory, setScanHistory] = useState<ScanResult[]>([]);
+  const [totalScanned, setTotalScanned] = useState(0);
+  const priceCache = useRef<Map<string, number[]>>(new Map());
+  const lastScanTime = useRef<Map<string, number>>(new Map());
+
+  const formatPrice = (p: number) => p >= 100 ? p.toFixed(2) : p >= 1 ? p.toFixed(4) : p.toFixed(6);
+
+  const openBybit = (symbol: string) => {
+    const base = symbol.split('/')[0];
+    window.open(`https://www.bybit.com/trade/spot/${base}/USDT`, '_blank');
+  };
+
+  const scan = useCallback(async () => {
+    setScanning(true);
+    const newSignals: Signal[] = [];
+    const now = Date.now();
+
     try {
-      const tickerRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
-      const tickerData = await tickerRes.json();
-      
-      const symbols = tickerData
-        .filter((item: any) => item.symbol.endsWith('USDT'))
-        .sort((a: any, b: any) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 80)
-        .map((item: any) => item.symbol);
-      
-      setScanStatus(`Загрузка данных по ${symbols.length} парам...`);
-      
-      const data = await fetchBinanceData(symbols);
-      
-      const allSignals: Signal[] = [];
-      let buyCount = 0;
-      let sellCount = 0;
-      
-      for (let i = 0; i < data.length; i++) {
-        const item = data[i];
-        if (!item) continue;
-        
-        const signal = generateSignal(item.symbol, item.prices, item.volumes);
-        if (signal) {
-          allSignals.push(signal);
-          if (signal.direction === 'BUY') buyCount++;
-          else if (signal.direction === 'SELL') sellCount++;
+      const res = await fetch('https://api.binance.com/api/v3/ticker/price');
+      const allPrices = await res.json();
+      let scannedCount = 0;
+
+      for (const sym of SYMBOLS) {
+        const binanceSym = sym.replace('/', '');
+        const ticker = allPrices.find((t: any) => t.symbol === binanceSym);
+        if (!ticker) continue;
+
+        const price = parseFloat(ticker.price);
+        if (!price) continue;
+
+        // Кэш цен
+        let history = priceCache.current.get(sym) || [];
+        history.push(price);
+        if (history.length > 200) history = history.slice(-200);
+        priceCache.current.set(sym, history);
+
+        if (history.length < 60) continue;
+
+        // Кулдаун 2 минуты
+        const lastScan = lastScanTime.current.get(sym);
+        if (lastScan && now - lastScan < 120000) continue;
+
+        // Индикаторы
+        const rsi = calcRSI(history);
+        const stoch = calcStochastic(history);
+        const adx = calcADX(history);
+        const macd = calcMACD(history);
+        const ema20 = calcEMA(history, 20);
+        const atr = calcATR(history);
+
+        // Фильтр ATR (волатильность > 0.3%)
+        if (atr / price < 0.003) continue;
+
+        // Фильтр ADX (тренд > 25)
+        if (adx < 25) continue;
+
+        scannedCount++;
+
+        // BUY
+        if (rsi < 30 && stoch < 20 && macd > 0 && price > ema20) {
+          const strength: 1 | 2 | 3 = rsi < 20 || stoch < 10 ? 3 : rsi < 25 ? 2 : 1;
+          newSignals.push({
+            symbol: sym, action: 'BUY', price, strength,
+            rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
+            tp: price * 1.01, sl: price * 0.997
+          });
+          lastScanTime.current.set(sym, now);
         }
-        
-        setScanProgress(Math.round(((i + 1) / data.length) * 100));
-        setScanStatus(`Обработка ${i + 1}/${data.length}: ${item.symbol}`);
-        
-        if (i % 10 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 10));
+        // SELL
+        else if (rsi > 70 && stoch > 80 && macd < 0 && price < ema20) {
+          const strength: 1 | 2 | 3 = rsi > 80 || stoch > 90 ? 3 : rsi > 75 ? 2 : 1;
+          newSignals.push({
+            symbol: sym, action: 'SELL', price, strength,
+            rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
+            tp: price * 0.99, sl: price * 1.003
+          });
+          lastScanTime.current.set(sym, now);
         }
       }
-      
-      // ============================================
-      // 🔥 ВЫБИРАЕМ ТОЛЬКО 1 САМЫЙ СИЛЬНЫЙ СИГНАЛ
-      // ============================================
-      let bestSignal: Signal | null = null;
-      let bestScore = -1;
-      
-      for (const signal of allSignals) {
-        const score = signal.strength * 20 + signal.confidence;
-        if (score > bestScore) {
-          bestScore = score;
-          bestSignal = signal;
-        }
-      }
-      
-      const newSignals = bestSignal ? [bestSignal] : [];
-      
-      setSignals(newSignals);
-      setLastScanTime(Date.now());
-      setScanStatus(bestSignal 
-        ? `🏆 VIP сигнал: ${bestSignal.symbol} (${bestSignal.direction}) ★${bestSignal.strength} ${bestSignal.confidence}%` 
-        : '😴 Сигналов не найдено'
-      );
-      
-      setHistory(prev => [...prev, {
-        timestamp: Date.now(),
-        totalSignals: allSignals.length,
-        buySignals: buyCount,
-        sellSignals: sellCount
-      }]);
-      
-    } catch (error) {
-      console.error('Scan failed:', error);
-      setScanStatus('❌ Ошибка сканирования');
-    } finally {
-      setIsScanning(false);
-      abortControllerRef.current = null;
+
+      setTotalScanned(scannedCount);
+      setSignals(newSignals.sort((a, b) => b.strength - a.strength));
+
+      // История
+      const result: ScanResult = {
+        time: new Date().toLocaleTimeString(),
+        total: scannedCount,
+        signals: newSignals.length,
+        buyCount: newSignals.filter(s => s.action === 'BUY').length,
+        sellCount: newSignals.filter(s => s.action === 'SELL').length,
+      };
+      setScanHistory(prev => [result, ...prev].slice(0, 20));
+    } catch (e) {
+      console.error('Ошибка сканирования:', e);
     }
-  }, [isScanning]);
-  
-  const filteredSignals = signals.filter(s => {
-    if (filterDirection !== 'ALL' && s.direction !== filterDirection) return false;
-    if (s.strength < minStrength) return false;
-    return true;
-  });
-  
-  const getStarRating = (strength: number) => {
-    return '★'.repeat(strength) + '☆'.repeat(5 - strength);
-  };
-  
-  const formatPrice = (price: number) => {
-    if (price >= 1000) return price.toFixed(2);
-    if (price >= 1) return price.toFixed(4);
-    return price.toFixed(6);
-  };
-  
-  const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 80) return 'text-green-400';
-    if (confidence >= 60) return 'text-yellow-400';
-    return 'text-red-400';
-  };
-  
-  // Функция для создания ссылки на Bybit Testnet
-  const getBybitLink = (symbol: string) => {
-    // Убираем USDT из названия для ссылки
-    const baseSymbol = symbol.replace('USDT', '');
-    return `https://testnet.bybit.com/trade/spot/${baseSymbol}/USDT`;
-  };
-  
+    setScanning(false);
+  }, []);
+
+  const filteredSignals = signals
+    .filter(s => filter === 'ALL' || s.action === filter)
+    .filter(s => s.strength >= minStrength);
+
   return (
-    <div className="min-h-screen bg-black text-white font-mono p-4 md:p-8">
-      <div className="fixed inset-0 bg-gradient-to-b from-red-900/5 via-black to-black pointer-events-none" />
-      
-      <div className="relative max-w-7xl mx-auto">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-red-500 to-red-800 bg-clip-text text-transparent">
-              ⚡ CYBER SCAN VIP
-            </h1>
-            <p className="text-gray-400 text-sm">10 индикаторов • Только лучший сигнал</p>
-            <p className="text-xs text-blue-400 mt-1">🧪 Bybit Testnet</p>
-          </div>
-          
-          <div className="flex flex-wrap gap-3">
+    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-black to-gray-950 text-white">
+      <header className="border-b border-red-500/20 bg-black/80 backdrop-blur sticky top-0 z-20">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex justify-between items-center flex-wrap gap-4">
+            <div>
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">🔍 CRYPTO SIGNAL SCANNER</h1>
+              <p className="text-xs text-gray-500 mt-1">{SYMBOLS.length} активов | RSI + Stoch + MACD + ADX + ATR</p>
+            </div>
             <button
-              onClick={scanMarket}
-              disabled={isScanning}
-              className="px-6 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-900/50 rounded-lg font-bold transition-all flex items-center gap-2 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)]"
+              onClick={scan}
+              disabled={scanning}
+              className={`px-8 py-3 rounded-xl font-bold text-lg transition-all ${
+                scanning 
+                  ? 'bg-gray-700 animate-pulse' 
+                  : 'bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 shadow-lg shadow-red-500/20'
+              }`}
             >
-              {isScanning ? (
-                <>
-                  <span className="animate-spin">⚡</span>
-                  {scanProgress}% SCAN...
-                </>
-              ) : (
-                '🔍 SCAN MARKET'
-              )}
+              {scanning ? '⏳ СКАНИРУЮ...' : '🔍 СКАНИРОВАТЬ РЫНОК'}
             </button>
-            
-            {lastScanTime && (
-              <span className="text-gray-500 text-sm self-center">
-                Последний: {new Date(lastScanTime).toLocaleTimeString()}
-              </span>
-            )}
           </div>
         </div>
-        
-        {/* Статус */}
-        <div className="mb-4 text-sm text-gray-400 bg-red-950/20 border border-red-800/20 rounded-lg p-2 px-4">
-          {scanStatus}
-        </div>
-        
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-          <div className="bg-red-950/30 border border-red-800/30 rounded-lg p-3">
-            <div className="text-gray-400 text-xs">ВСЕГО</div>
-            <div className="text-2xl font-bold text-red-400">{signals.length}</div>
-          </div>
-          <div className="bg-green-950/30 border border-green-800/30 rounded-lg p-3">
-            <div className="text-gray-400 text-xs">BUY</div>
-            <div className="text-2xl font-bold text-green-400">
-              {signals.filter(s => s.direction === 'BUY').length}
+      </header>
+
+      <div className="container mx-auto px-4 py-6">
+        {/* Статистика */}
+        {signals.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+            <div className="bg-black/50 rounded-xl p-3 border border-red-500/20 text-center">
+              <div className="text-xs text-gray-500">Просканировано</div>
+              <div className="text-xl font-bold text-white">{totalScanned}</div>
+            </div>
+            <div className="bg-black/50 rounded-xl p-3 border border-green-500/20 text-center">
+              <div className="text-xs text-gray-500">Сигналов</div>
+              <div className="text-xl font-bold text-green-400">{signals.length}</div>
+            </div>
+            <div className="bg-black/50 rounded-xl p-3 border border-green-500/20 text-center">
+              <div className="text-xs text-gray-500">BUY</div>
+              <div className="text-xl font-bold text-green-400">{signals.filter(s => s.action === 'BUY').length}</div>
+            </div>
+            <div className="bg-black/50 rounded-xl p-3 border border-red-500/20 text-center">
+              <div className="text-xs text-gray-500">SELL</div>
+              <div className="text-xl font-bold text-red-400">{signals.filter(s => s.action === 'SELL').length}</div>
+            </div>
+            <div className="bg-black/50 rounded-xl p-3 border border-yellow-500/20 text-center">
+              <div className="text-xs text-gray-500">★★★</div>
+              <div className="text-xl font-bold text-yellow-400">{signals.filter(s => s.strength === 3).length}</div>
+            </div>
+            <div className="bg-black/50 rounded-xl p-3 border border-blue-500/20 text-center">
+              <div className="text-xs text-gray-500">Последнее</div>
+              <div className="text-sm font-bold text-blue-400">{scanHistory[0]?.time || '—'}</div>
             </div>
           </div>
-          <div className="bg-red-950/30 border border-red-800/30 rounded-lg p-3">
-            <div className="text-gray-400 text-xs">SELL</div>
-            <div className="text-2xl font-bold text-red-400">
-              {signals.filter(s => s.direction === 'SELL').length}
-            </div>
-          </div>
-          <div className="bg-purple-950/30 border border-purple-800/30 rounded-lg p-3">
-            <div className="text-gray-400 text-xs">VIP (★4+)</div>
-            <div className="text-2xl font-bold text-purple-400">
-              {signals.filter(s => s.strength >= 4).length}
-            </div>
-          </div>
-          <div className="bg-yellow-950/30 border border-yellow-800/30 rounded-lg p-3">
-            <div className="text-gray-400 text-xs">Точность</div>
-            <div className="text-2xl font-bold text-yellow-400">
-              {signals.length > 0 ? Math.round(signals.reduce((a, s) => a + s.confidence, 0) / signals.length) : 0}%
-            </div>
-          </div>
-        </div>
-        
-        <div className="flex flex-wrap gap-3 mb-6 bg-red-950/10 border border-red-800/20 rounded-lg p-4">
-          <div className="flex items-center gap-2">
-            <span className="text-gray-400 text-sm">Направление:</span>
-            <div className="flex gap-1">
-              {['ALL', 'BUY', 'SELL'].map(dir => (
-                <button
-                  key={dir}
-                  onClick={() => setFilterDirection(dir as any)}
-                  className={`px-3 py-1 text-sm rounded transition-colors ${
-                    filterDirection === dir
-                      ? dir === 'BUY' ? 'bg-green-600 text-white' :
-                        dir === 'SELL' ? 'bg-red-600 text-white' :
-                        'bg-gray-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                  }`}
-                >
-                  {dir}
-                </button>
-              ))}
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="text-gray-400 text-sm">Мин. сила:</span>
-            <div className="flex gap-1">
-              {[1, 2, 3, 4, 5].map(s => (
-                <button
-                  key={s}
-                  onClick={() => setMinStrength(s)}
-                  className={`px-2 py-1 text-sm rounded transition-colors ${
-                    minStrength === s
-                      ? 'bg-red-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <AnimatePresence>
-            {filteredSignals.map((signal, index) => (
-              <motion.div
-                key={`${signal.symbol}-${signal.timestamp}`}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                transition={{ delay: index * 0.05 }}
-                className={`border-2 rounded-lg p-5 ${
-                  signal.direction === 'BUY'
-                    ? 'bg-green-950/30 border-green-500/50 shadow-[0_0_30px_rgba(34,197,94,0.15)]'
-                    : 'bg-red-950/30 border-red-500/50 shadow-[0_0_30px_rgba(239,68,68,0.15)]'
+        )}
+
+        {/* Фильтры */}
+        <div className="flex flex-wrap gap-3 mb-6">
+          <div className="flex gap-1 bg-black/40 rounded-lg p-1">
+            {(['ALL', 'BUY', 'SELL'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  filter === f ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'
                 }`}
               >
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <a 
-                      href={getBybitLink(signal.symbol)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-2xl font-bold hover:text-blue-400 transition-colors cursor-pointer flex items-center gap-2"
-                      title="Открыть на Bybit Testnet"
-                    >
-                      {signal.symbol} 
-                      <span className="text-sm text-blue-400">↗</span>
-                    </a>
-                    <div className={`text-lg font-bold ${
-                      signal.direction === 'BUY' ? 'text-green-400' : 'text-red-400'
-                    }`}>
-                      {signal.direction} 
-                      <span className={`text-sm ml-3 ${getConfidenceColor(signal.confidence)}`}>
-                        {signal.confidence}% точность
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-gray-400">Цена</div>
-                    <div className="text-xl font-mono font-bold">${formatPrice(signal.price)}</div>
-                  </div>
-                </div>
-                
-                <div className="flex items-center gap-3 mb-4">
-                  <span className="text-2xl text-yellow-400">{getStarRating(signal.strength)}</span>
-                  <span className="text-gray-500 text-sm">({signal.strength}/5)</span>
-                  <span className="ml-auto text-xs text-gray-500">
-                    #{signal.timestamp.toString().slice(-6)}
+                {f === 'ALL' ? 'Все' : f}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1 bg-black/40 rounded-lg p-1">
+            {([1, 2, 3] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => setMinStrength(s as 1 | 2 | 3)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  minStrength === s ? 'bg-yellow-600 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                {'★'.repeat(s)}{'☆'.repeat(3 - s)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Сигналы */}
+        {filteredSignals.length === 0 && !scanning && (
+          <div className="text-center py-20 text-gray-600">
+            <div className="text-6xl mb-4">🔍</div>
+            <div className="text-lg">Нет сигналов</div>
+            <div className="text-sm mt-2">Нажми "Сканировать рынок" для поиска</div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredSignals.map((s, i) => (
+            <div
+              key={i}
+              onClick={() => openBybit(s.symbol)}
+              className={`rounded-xl p-4 border cursor-pointer transition-all hover:scale-[1.02] ${
+                s.action === 'BUY'
+                  ? 'bg-gradient-to-br from-green-950/30 to-black border-green-500/30 hover:border-green-400/50'
+                  : 'bg-gradient-to-br from-red-950/30 to-black border-red-500/30 hover:border-red-400/50'
+              }`}
+            >
+              <div className="flex justify-between items-start mb-3">
+                <div>
+                  <span className="font-bold text-lg">{s.symbol}</span>
+                  <span className={`ml-2 px-2 py-0.5 rounded text-xs font-bold ${
+                    s.action === 'BUY' ? 'bg-green-600' : 'bg-red-600'
+                  }`}>
+                    {s.action}
                   </span>
                 </div>
-                
-                <div className="grid grid-cols-3 gap-2 text-xs mb-4 bg-black/30 rounded-lg p-3">
-                  <div className="text-gray-400">RSI: <span className="text-white font-bold">{signal.indicators.rsi.toFixed(1)}</span></div>
-                  <div className="text-gray-400">Stoch: <span className="text-white font-bold">{signal.indicators.stochastic.toFixed(1)}</span></div>
-                  <div className="text-gray-400">ADX: <span className="text-white font-bold">{signal.indicators.adx.toFixed(1)}</span></div>
-                  <div className="text-gray-400 col-span-1">MACD: <span className="text-white font-bold">{signal.indicators.macd.toFixed(4)}</span></div>
-                  <div className="text-gray-400 col-span-2">MACD Hist: <span className="text-white font-bold">{signal.indicators.macdHistogram.toFixed(4)}</span></div>
-                  <div className="text-gray-400">EMA20: <span className="text-white font-bold">{signal.indicators.ema20.toFixed(4)}</span></div>
-                  <div className="text-gray-400">EMA50: <span className="text-white font-bold">{signal.indicators.ema50.toFixed(4)}</span></div>
-                  <div className="text-gray-400">BB: <span className="text-white font-bold">{signal.indicators.bollingerUpper.toFixed(4)}</span></div>
+                <span className="text-yellow-400 text-sm">{'★'.repeat(s.strength)}{'☆'.repeat(3 - s.strength)}</span>
+              </div>
+
+              <div className="text-2xl font-bold mb-3">${formatPrice(s.price)}</div>
+
+              <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+                <div className="bg-black/40 rounded p-2">
+                  <div className="text-gray-500">TP (+1%)</div>
+                  <div className="text-green-400 font-bold">${formatPrice(s.tp)}</div>
                 </div>
-                
-                <div className="flex justify-between text-sm border-t border-gray-800 pt-3">
-                  <div>
-                    <span className="text-gray-400">TP</span>
-                    <span className="text-green-400 ml-2">+1.5%</span>
-                    <span className="text-gray-500 ml-2">${formatPrice(signal.tp)}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-400">SL</span>
-                    <span className="text-red-400 ml-2">-0.5%</span>
-                    <span className="text-gray-500 ml-2">${formatPrice(signal.sl)}</span>
-                  </div>
+                <div className="bg-black/40 rounded p-2">
+                  <div className="text-gray-500">SL (-0.3%)</div>
+                  <div className="text-red-400 font-bold">${formatPrice(s.sl)}</div>
                 </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+              </div>
+
+              <div className="grid grid-cols-5 gap-1 text-xs">
+                <div className="bg-black/30 rounded p-1.5 text-center">
+                  <div className="text-gray-500">RSI</div>
+                  <div className={s.rsi < 30 ? 'text-green-400' : s.rsi > 70 ? 'text-red-400' : 'text-white'}>{s.rsi}</div>
+                </div>
+                <div className="bg-black/30 rounded p-1.5 text-center">
+                  <div className="text-gray-500">STOCH</div>
+                  <div className={s.stoch < 20 ? 'text-green-400' : s.stoch > 80 ? 'text-red-400' : 'text-white'}>{s.stoch}</div>
+                </div>
+                <div className="bg-black/30 rounded p-1.5 text-center">
+                  <div className="text-gray-500">ADX</div>
+                  <div className="text-white">{s.adx}</div>
+                </div>
+                <div className="bg-black/30 rounded p-1.5 text-center">
+                  <div className="text-gray-500">MACD</div>
+                  <div className={s.macd > 0 ? 'text-green-400' : 'text-red-400'}>{s.macd.toFixed(4)}</div>
+                </div>
+                <div className="bg-black/30 rounded p-1.5 text-center">
+                  <div className="text-gray-500">ATR</div>
+                  <div className="text-white">{s.atr.toFixed(4)}</div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
-        
-        {filteredSignals.length === 0 && signals.length > 0 && (
-          <div className="text-center text-gray-500 py-12">
-            Нет сигналов по фильтрам
-          </div>
-        )}
-        
-        {signals.length === 0 && !isScanning && (
-          <div className="text-center text-gray-500 py-20">
-            <div className="text-6xl mb-4">📡</div>
-            <p>Нажмите "SCAN MARKET" для сканирования</p>
-            <p className="text-sm text-gray-600 mt-2">80 пар USDT на Binance • 10 индикаторов</p>
-            <p className="text-sm text-gray-600 mt-1">Показывается только 1 лучший сигнал</p>
-            <p className="text-sm text-blue-400 mt-2">🧪 Торговля на Bybit Testnet</p>
-          </div>
-        )}
-        
-        {history.length > 0 && (
-          <div className="mt-12 border-t border-red-800/20 pt-6">
-            <h2 className="text-xl font-bold text-red-400 mb-4">📊 ИСТОРИЯ</h2>
-            <div className="overflow-x-auto">
+
+        {/* История */}
+        {scanHistory.length > 0 && (
+          <div className="mt-8">
+            <h2 className="text-lg font-bold text-gray-400 mb-3">📜 История сканирований</h2>
+            <div className="bg-black/40 rounded-xl border border-gray-800 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-gray-400 border-b border-gray-800">
-                    <th className="text-left py-2">Время</th>
-                    <th className="text-right py-2">Всего</th>
-                    <th className="text-right py-2 text-green-400">BUY</th>
-                    <th className="text-right py-2 text-red-400">SELL</th>
+                  <tr className="border-b border-gray-800 text-gray-500">
+                    <th className="py-2 px-4 text-left">Время</th>
+                    <th className="py-2 px-4">Просканировано</th>
+                    <th className="py-2 px-4">Сигналов</th>
+                    <th className="py-2 px-4">BUY</th>
+                    <th className="py-2 px-4">SELL</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {history.slice(-10).reverse().map((h, i) => (
-                    <tr key={i} className="border-b border-gray-800/50">
-                      <td className="py-2 text-gray-300">{new Date(h.timestamp).toLocaleTimeString()}</td>
-                      <td className="text-right">{h.totalSignals}</td>
-                      <td className="text-right text-green-400">{h.buySignals}</td>
-                      <td className="text-right text-red-400">{h.sellSignals}</td>
+                  {scanHistory.map((h, i) => (
+                    <tr key={i} className="border-b border-gray-800/50 text-center">
+                      <td className="py-2 px-4 text-left text-gray-400">{h.time}</td>
+                      <td className="py-2 px-4">{h.total}</td>
+                      <td className="py-2 px-4 text-green-400 font-bold">{h.signals}</td>
+                      <td className="py-2 px-4 text-green-400">{h.buyCount}</td>
+                      <td className="py-2 px-4 text-red-400">{h.sellCount}</td>
                     </tr>
                   ))}
                 </tbody>
