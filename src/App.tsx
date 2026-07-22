@@ -52,7 +52,7 @@ interface ScanResult {
   sellCount: number;
 }
 
-const AI_TOKEN = import.meta.env.VITE_AI_TOKEN || '';
+const AI_TOKEN = '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';
 
 const calcRSI = (prices: number[], period: number = 14): number => {
   if (prices.length < period + 1) return 50;
@@ -159,12 +159,13 @@ const App = () => {
     setSignals([]);
     let found = false;
     let attempts = 0;
-    const maxAttempts = 15;
+    const maxAttempts = 10;
 
     while (!found && attempts < maxAttempts) {
       const newSignals: Signal[] = [];
       attempts++;
       setAttemptInfo(`Поиск сигналов... Попытка ${attempts}/${maxAttempts}`);
+      console.log(`🔍 Попытка ${attempts}/${maxAttempts}`);
 
       try {
         const [priceRes, volumeRes] = await Promise.all([
@@ -175,6 +176,8 @@ const App = () => {
         const allPrices = await priceRes.json();
         const volumeData = await volumeRes.json();
         
+        console.log(`📊 Получено ${allPrices.length} цен`);
+
         const topByVolume = new Set(
           volumeData
             .filter((t: any) => t.symbol.endsWith('USDT'))
@@ -209,20 +212,20 @@ const App = () => {
           const ema20 = calcEMA(history, 20);
           const atr = calcATR(history);
 
-          if (atr / price < 0.002) continue;
+          if (atr / price < 0.001) continue;
 
           scannedCount++;
 
-          if (rsi < 40 && stoch < 30 && macd > 0 && price > ema20 && adx > 20) {
-            const strength: 1 | 2 | 3 = rsi < 25 && stoch < 15 ? 3 : rsi < 32 ? 2 : 1;
+          if (rsi < 45 && stoch < 35 && macd > 0 && price > ema20 && adx > 18) {
+            const strength: 1 | 2 | 3 = rsi < 28 && stoch < 18 ? 3 : rsi < 35 ? 2 : 1;
             const baseProb = strength === 3 ? 75 : strength === 2 ? 60 : 45;
             newSignals.push({
               symbol: sym, action: 'BUY', price, strength, probability: baseProb,
               rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
               tp: price * 1.01, sl: price * 0.997
             });
-          } else if (rsi > 60 && stoch > 70 && macd < 0 && price < ema20 && adx > 20) {
-            const strength: 1 | 2 | 3 = rsi > 75 && stoch > 85 ? 3 : rsi > 68 ? 2 : 1;
+          } else if (rsi > 55 && stoch > 65 && macd < 0 && price < ema20 && adx > 18) {
+            const strength: 1 | 2 | 3 = rsi > 72 && stoch > 82 ? 3 : rsi > 65 ? 2 : 1;
             const baseProb = strength === 3 ? 75 : strength === 2 ? 60 : 45;
             newSignals.push({
               symbol: sym, action: 'SELL', price, strength, probability: baseProb,
@@ -232,20 +235,12 @@ const App = () => {
           }
         }
 
+        console.log(`📊 Просканировано: ${scannedCount}, сигналов: ${newSignals.length}`);
+
         if (newSignals.length > 0) {
           found = true;
           const sorted = newSignals.sort((a, b) => b.probability - a.probability);
           
-          if (AI_TOKEN && sorted.length > 0) {
-            setAttemptInfo('AI анализирует сигналы...');
-            for (let i = 0; i < Math.min(3, sorted.length); i++) {
-              const s = sorted[i];
-              const aiProb = await getAIProbability(s.symbol, s.action, s.rsi, s.stoch, s.adx);
-              s.probability = Math.round((s.probability + aiProb) / 2);
-              s.aiVerdict = aiProb > 60 ? '✅ AI подтверждает' : aiProb > 40 ? '⚠️ AI сомневается' : '❌ AI против';
-            }
-          }
-
           const buyCount = sorted.filter(s => s.action === 'BUY').length;
           const sellCount = sorted.filter(s => s.action === 'SELL').length;
           const total = buyCount + sellCount || 1;
@@ -274,21 +269,13 @@ const App = () => {
       }
 
       if (!found && attempts < maxAttempts) {
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 2000));
       }
     }
 
     if (!found) {
-      setAttemptInfo('Сигналы не найдены после 15 попыток');
+      setAttemptInfo('Сигналы не найдены');
       setScanCount(prev => prev + 1);
-      const result: ScanResult = {
-        time: new Date().toLocaleTimeString(),
-        total: 0,
-        signals: 0,
-        buyCount: 0,
-        sellCount: 0
-      };
-      setScanHistory(prev => [result, ...prev].slice(0, 20));
     }
 
     setScanning(false);
@@ -305,7 +292,7 @@ const App = () => {
           <div className="flex justify-between items-center flex-wrap gap-4">
             <div>
               <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">🤖 AI CRYPTO SIGNAL SCANNER</h1>
-              <p className="text-xs text-gray-500 mt-1">{SYMBOLS.length} активов | AI + RSI + Stoch + MACD + ADX + ATR</p>
+              <p className="text-xs text-gray-500 mt-1">{SYMBOLS.length} активов | RSI + Stoch + MACD + ADX + ATR</p>
             </div>
             <button
               onClick={scan}
@@ -316,7 +303,7 @@ const App = () => {
                   : 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 shadow-lg shadow-purple-500/20'
               }`}
             >
-              {scanning ? '⏳ ИЩУ СИГНАЛЫ...' : '🤖 СКАНИРОВАТЬ С AI'}
+              {scanning ? '⏳ ИЩУ СИГНАЛЫ...' : '🤖 СКАНИРОВАТЬ'}
             </button>
           </div>
         </div>
@@ -367,8 +354,8 @@ const App = () => {
                 <div className="text-xl font-bold text-red-400">{signals.filter(s => s.action === 'SELL').length}</div>
               </div>
               <div className="bg-black/50 rounded-xl p-3 border border-yellow-500/20 text-center">
-                <div className="text-xs text-gray-500">Высокая вероятность</div>
-                <div className="text-xl font-bold text-yellow-400">{signals.filter(s => s.probability >= 60).length}</div>
+                <div className="text-xs text-gray-500">★★★</div>
+                <div className="text-xl font-bold text-yellow-400">{signals.filter(s => s.strength === 3).length}</div>
               </div>
               <div className="bg-black/50 rounded-xl p-3 border border-blue-500/20 text-center">
                 <div className="text-xs text-gray-500">Сканирований</div>
@@ -435,13 +422,6 @@ const App = () => {
                     </div>
                   </div>
                   <div className="text-2xl font-bold mb-3">${formatPrice(s.price)}</div>
-                  {s.aiVerdict && (
-                    <div className={`mb-3 text-xs px-3 py-1.5 rounded-lg ${
-                      s.aiVerdict.includes('✅') ? 'bg-green-500/10 text-green-400' :
-                      s.aiVerdict.includes('❌') ? 'bg-red-500/10 text-red-400' :
-                      'bg-yellow-500/10 text-yellow-400'
-                    }`}>{s.aiVerdict}</div>
-                  )}
                   <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
                     <div className="bg-black/40 rounded p-2">
                       <div className="text-gray-500">TP (+1%)</div>
@@ -511,7 +491,7 @@ const App = () => {
         {!scanning && scanCount === 0 && (
           <div className="text-center py-20 text-gray-600">
             <div className="text-6xl mb-4">🤖</div>
-            <div className="text-lg">Нажми "Сканировать с AI" для поиска сигналов</div>
+            <div className="text-lg">Нажми "Сканировать" для поиска сигналов</div>
             <div className="text-sm mt-2">Сканер будет искать пока не найдёт сигналы</div>
           </div>
         )}
