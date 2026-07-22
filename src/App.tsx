@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
 
-// ==================== 150+ АКТИВОВ ====================
 const SYMBOLS = [
   'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'ADA/USDT',
   'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT', 'LINK/USDT', 'LTC/USDT', 'UNI/USDT', 'ATOM/USDT',
@@ -51,7 +50,6 @@ interface ScanResult {
   sellCount: number;
 }
 
-// ==================== ИНДИКАТОРЫ ====================
 const calcRSI = (prices: number[], period: number = 14): number => {
   if (prices.length < period + 1) return 50;
   let gains = 0, losses = 0;
@@ -123,7 +121,6 @@ const App = () => {
   const [totalScanned, setTotalScanned] = useState(0);
   const [scanCount, setScanCount] = useState(0);
   const priceCache = useRef<Map<string, number[]>>(new Map());
-  const lastScanTime = useRef<Map<string, number>>(new Map());
 
   const formatPrice = (p: number) => p >= 100 ? p.toFixed(2) : p >= 1 ? p.toFixed(4) : p.toFixed(6);
 
@@ -135,7 +132,6 @@ const App = () => {
   const scan = useCallback(async () => {
     setScanning(true);
     const newSignals: Signal[] = [];
-    const now = Date.now();
 
     try {
       const [priceRes, volumeRes] = await Promise.all([
@@ -146,7 +142,6 @@ const App = () => {
       const allPrices = await priceRes.json();
       const volumeData = await volumeRes.json();
       
-      // Топ-100 по объёму
       const topByVolume = new Set(
         volumeData
           .filter((t: any) => t.symbol.endsWith('USDT'))
@@ -158,7 +153,6 @@ const App = () => {
       let scannedCount = 0;
 
       for (const sym of SYMBOLS) {
-        // Пропускаем неликвидные
         if (!topByVolume.has(sym)) continue;
 
         const binanceSym = sym.replace('/', '');
@@ -168,7 +162,6 @@ const App = () => {
         const price = parseFloat(ticker.price);
         if (!price) continue;
 
-        // Кэш цен
         let history = priceCache.current.get(sym) || [];
         history.push(price);
         if (history.length > 200) history = history.slice(-200);
@@ -176,7 +169,6 @@ const App = () => {
 
         if (history.length < 50) continue;
 
-        // Индикаторы
         const rsi = calcRSI(history);
         const stoch = calcStochastic(history);
         const adx = calcADX(history);
@@ -184,12 +176,10 @@ const App = () => {
         const ema20 = calcEMA(history, 20);
         const atr = calcATR(history);
 
-        // Фильтр ATR (волатильность > 0.2%)
         if (atr / price < 0.002) continue;
 
         scannedCount++;
 
-        // BUY — мягкие условия
         if (rsi < 40 && stoch < 30 && macd > 0 && price > ema20 && adx > 20) {
           const strength: 1 | 2 | 3 = rsi < 25 && stoch < 15 ? 3 : rsi < 32 ? 2 : 1;
           newSignals.push({
@@ -197,9 +187,7 @@ const App = () => {
             rsi, stoch: Math.round(stoch), adx: Math.round(adx), macd, ema20, atr,
             tp: price * 1.01, sl: price * 0.997
           });
-        }
-        // SELL — мягкие условия
-        else if (rsi > 60 && stoch > 70 && macd < 0 && price < ema20 && adx > 20) {
+        } else if (rsi > 60 && stoch > 70 && macd < 0 && price < ema20 && adx > 20) {
           const strength: 1 | 2 | 3 = rsi > 75 && stoch > 85 ? 3 : rsi > 68 ? 2 : 1;
           newSignals.push({
             symbol: sym, action: 'SELL', price, strength,
@@ -213,7 +201,6 @@ const App = () => {
       setSignals(newSignals.sort((a, b) => b.strength - a.strength));
       setScanCount(prev => prev + 1);
 
-      // История
       const result: ScanResult = {
         time: new Date().toLocaleTimeString(),
         total: scannedCount,
@@ -257,7 +244,6 @@ const App = () => {
       </header>
 
       <div className="container mx-auto px-4 py-6">
-        {/* Статистика */}
         {scanCount > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
             <div className="bg-black/50 rounded-xl p-3 border border-red-500/20 text-center">
@@ -287,7 +273,6 @@ const App = () => {
           </div>
         )}
 
-        {/* Фильтры */}
         <div className="flex flex-wrap gap-3 mb-6">
           <div className="flex gap-1 bg-black/40 rounded-lg p-1">
             {(['ALL', 'BUY', 'SELL'] as const).map(f => (
@@ -317,7 +302,6 @@ const App = () => {
           </div>
         </div>
 
-        {/* Сигналы */}
         {scanCount === 0 && !scanning && (
           <div className="text-center py-20 text-gray-600">
             <div className="text-6xl mb-4">🔍</div>
@@ -329,7 +313,6 @@ const App = () => {
           <div className="text-center py-10 text-gray-500">
             <div className="text-4xl mb-3">📭</div>
             <div>Нет сигналов с выбранными фильтрами</div>
-            <div className="text-sm mt-2">Попробуй изменить фильтры или нажать сканировать позже</div>
           </div>
         )}
 
@@ -395,7 +378,6 @@ const App = () => {
           ))}
         </div>
 
-        {/* История */}
         {scanHistory.length > 0 && (
           <div className="mt-8">
             <h2 className="text-lg font-bold text-gray-400 mb-3">📜 История сканирований</h2>
